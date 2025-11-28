@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - مرحبا تسعينات</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="nav-brand">
+                <h1>🎟️ مرحبا تسعينات - Admin</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="#" id="logout-btn" class="nav-link">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Login Form -->
+    <div id="login-section" class="admin-section">
+        <div class="container">
+            <div class="login-box">
+                <h2>Admin Login</h2>
+                <form id="login-form">
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" id="login-email" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="login-password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Login</button>
+                    <p class="hint">Default: admin@etickets.jo / admin123</p>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Dashboard -->
+    <div id="dashboard-section" class="admin-section" style="display: none;">
+        <div class="container">
+            <!-- Stats -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3 id="stat-events">0</h3>
+                    <p>Total Events</p>
+                </div>
+                <div class="stat-card">
+                    <h3 id="stat-orders">0</h3>
+                    <p>Total Orders</p>
+                </div>
+                <div class="stat-card">
+                    <h3 id="stat-pending">0</h3>
+                    <p>Pending Orders</p>
+                </div>
+                <div class="stat-card">
+                    <h3 id="stat-revenue">0 JOD</h3>
+                    <p>Total Revenue</p>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="pending-orders">Pending Orders</button>
+                <button class="tab-btn" data-tab="all-orders">All Orders</button>
+                <button class="tab-btn" data-tab="events">Events</button>
+            </div>
+
+            <!-- Pending Orders Tab -->
+            <div id="pending-orders-tab" class="tab-content active">
+                <h2>Pending Orders</h2>
+                <div id="pending-orders-list"></div>
+            </div>
+
+            <!-- All Orders Tab -->
+            <div id="all-orders-tab" class="tab-content">
+                <h2>All Orders</h2>
+                <div id="all-orders-list"></div>
+            </div>
+
+            <!-- Events Tab -->
+            <div id="events-tab" class="tab-content">
+                <h2>Events Management</h2>
+                <button id="add-event-btn" class="btn btn-primary">Add New Event</button>
+                <div id="events-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Event Form Modal -->
+    <div id="event-form-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2 id="event-form-title">Add Event</h2>
+            <form id="event-form" enctype="multipart/form-data">
+                <input type="hidden" id="event-id">
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="event-title" required>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="event-description" rows="4"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Date</label>
+                        <input type="date" id="event-date" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Time</label>
+                        <input type="time" id="event-time" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Venue</label>
+                    <input type="text" id="event-venue" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Price (JOD)</label>
+                        <input type="number" id="event-price" step="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Quantity</label>
+                        <input type="number" id="event-quantity" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="event-status">
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Image</label>
+                    <input type="file" id="event-image" accept="image/*">
+                </div>
+                <button type="submit" class="btn btn-primary">Save Event</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="/js/admin.js"></script>
+</body>
+</html>
