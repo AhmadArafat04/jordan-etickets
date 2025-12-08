@@ -1,120 +1,138 @@
 import express from 'express';
-import multer from 'multer';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import db from '../database.js';
+import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const router = express.Router();
 
-// Configure multer for file uploads
+// Configure multer for payment proof uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, join(__dirname, '../../public/uploads'));
+    const uploadDir = path.join(__dirname, '../../public/uploads/payments');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}${file.originalname.substring(file.originalname.lastIndexOf('.'))}`;
-    cb(null, uniqueName);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'payment-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 
-const upload = multer({ storage });
-
-// Generate unique reference number
-function generateReference() {
-  return 'TKT-' + Math.random().toString(36).substr(2, 6).toUpperCase();
-}
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|pdf/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only images and PDFs are allowed'));
+    }
+  }
+});
 
 // Create new order
-router.post('/', async (req, res) => {
-  try {
-    const { event_id, customer_name, customer_email, customer_phone, customer_age, quantity } = req.body;
+router.post('/', upload.single('paymentProof'), async (req, res) => {
+  const { 
+    customerName, 
+    customerEmail, 
+    customerPhone, 
+    customerAge,
+    eventId, 
+    numTickets, 
+    paymentMethod 
+  } = req.body;
 
+  try {
     // Get event details
-    const event = await db.prepare('SELECT * FROM events WHERE id = ? AND status = ?').get(event_id, 'active');
-    if (!event) {
+    const eventResult = await db.query('SELECT * FROM events WHERE id = $1', [eventId]);
+    
+    if (eventResult.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Check availability
-    if (event.quantity - event.sold < quantity) {
+    const event = eventResult.rows[0];
+
+    // Check ticket availability
+    if (event.available_tickets < parseInt(numTickets)) {
       return res.status(400).json({ error: 'Not enough tickets available' });
     }
 
-    // Generate reference number
-    let reference_number;
-    let attempts = 0;
-    do {
-      reference_number = generateReference();
-      attempts++;
-    } while (await db.prepare('SELECT id FROM orders WHERE reference_number = ?').get(reference_number) && attempts < 10);
+    // Calculate total price
+    const totalPrice = event.price * parseInt(numTickets);
 
-    // Calculate total
-    const total_amount = event.price * quantity;
+    // Handle payment proof
+    const paymentProof = req.file ? `/uploads/payments/${req.file.filename}` : null;
 
     // Create order
-    const result = await db.prepare(`
-      INSERT INTO orders (reference_number, event_id, customer_name, customer_email, 
-                         customer_phone, customer_age, quantity, total_amount, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(reference_number, event_id, customer_name, customer_email, customer_phone, 
-           customer_age, quantity, total_amount, 'pending');
+    const orderResult = await db.query(
+      `INSERT INTO orders (
+        customer_name, customer_email, customer_phone, customer_age,
+        event_id, num_tickets, total_price, payment_method, payment_proof, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *`,
+      [
+        customerName,
+        customerEmail,
+        customerPhone,
+        parseInt(customerAge),
+        eventId,
+        parseInt(numTickets),
+        totalPrice,
+        paymentMethod,
+        paymentProof,
+        'pending'
+      ]
+    );
 
-    res.json({
-      order_id: result.lastInsertRowid,
-      reference_number,
-      total_amount,
-      cliq_alias: process.env.CLIQ_ALIAS
-    });
+    // Update available tickets
+    await db.query(
+      'UPDATE events SET available_tickets = available_tickets - $1 WHERE id = $2',
+      [parseInt(numTickets), eventId]
+    );
+
+    res.status(201).json(orderResult.rows[0]);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error creating order:', error);
+    res.status(500).json({ error: 'Failed to create order' });
   }
 });
 
-// Upload payment proof
-router.post('/:reference/proof', upload.single('payment_proof'), async (req, res) => {
+// Get order by ID
+router.get('/:id', async (req, res) => {
   try {
-    const { reference } = req.params;
-    
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    const order = await db.prepare('SELECT id FROM orders WHERE reference_number = ?').get(reference);
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    await db.prepare('UPDATE orders SET payment_proof = ? WHERE reference_number = ?')
-      .run(`/uploads/${req.file.filename}`, reference);
-
-    res.json({ message: 'Payment proof uploaded successfully' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Check order status
-router.get('/:reference', async (req, res) => {
-  try {
-    const order = await db.prepare(`
-      SELECT o.*, e.title as event_title, e.date, e.time, e.venue
+    const result = await db.query(
+      `SELECT 
+        o.*,
+        e.title as event_title,
+        e.date as event_date,
+        e.time as event_time,
+        e.location as event_location
       FROM orders o
-      JOIN events e ON o.event_id = e.id
-      WHERE o.reference_number = ?
-    `).get(req.params.reference);
+      LEFT JOIN events e ON o.event_id = e.id
+      WHERE o.id = $1`,
+      [req.params.id]
+    );
 
-    if (!order) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    res.json(order);
+    res.json(result.rows[0]);
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error fetching order:', error);
+    res.status(500).json({ error: 'Failed to fetch order' });
   }
 });
 
