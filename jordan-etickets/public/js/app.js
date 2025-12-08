@@ -31,9 +31,9 @@ async function loadEvents() {
                 <div class="event-info">
                     <h3>${event.title}</h3>
                     <p class="event-meta">📅 ${formatDate(event.date)} at ${event.time}</p>
-                    <p class="event-meta">📍 ${event.venue}</p>
+                    <p class="event-meta">📍 ${event.location || 'TBA'}</p>
                     <p class="event-price">${event.price} JOD</p>
-                    <p class="event-availability">${event.quantity - event.sold} tickets available</p>
+                    <p class="event-availability">${event.available_tickets} tickets available</p>
                 </div>
             </div>
         `).join('');
@@ -59,9 +59,9 @@ async function showEventDetails(eventId) {
             <div style="margin: 1rem 0;">
                 <p><strong>📅 Date:</strong> ${formatDate(event.date)}</p>
                 <p><strong>🕐 Time:</strong> ${event.time}</p>
-                <p><strong>📍 Venue:</strong> ${event.venue}</p>
+                <p><strong>📍 Venue:</strong> ${event.location || 'TBA'}</p>
                 <p><strong>💰 Price:</strong> ${event.price} JOD per ticket</p>
-                <p><strong>🎫 Available:</strong> ${event.quantity - event.sold} tickets</p>
+                <p><strong>🎫 Available:</strong> ${event.available_tickets} tickets</p>
             </div>
             <button class="btn btn-primary" onclick="startCheckout(${event.id})">Buy Tickets</button>
         `;
@@ -111,7 +111,7 @@ async function showCheckoutModal(eventId) {
                     </div>
                     <div class="form-group">
                         <label>Number of Tickets *</label>
-                        <input type="number" id="ticket-quantity" min="1" max="${event.quantity - event.sold}" value="1" required>
+                        <input type="number" id="ticket-quantity" min="1" max="${event.available_tickets}" value="1" required>
                     </div>
                 </div>
                 <div class="step">
