@@ -1,29 +1,42 @@
 import express from 'express';
 import db from '../database.js';
-import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 const router = express.Router();
 
 // Admin login
 router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { email, password } = req.body;
 
   try {
-    const result = await db.query(
-      'SELECT * FROM admins WHERE username = $1 AND password = $2',
-      [username, password]
+    // Query using email (not username)
+    const admins = await db.query(
+      'SELECT * FROM admins WHERE email = $1',
+      [email]
     );
 
-    if (result.rows.length === 0) {
+    if (admins.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const admin = result.rows[0];
+    const admin = admins[0];
 
-    // Generate token
-    const token = crypto.randomBytes(32).toString('hex');
+    // Compare password using bcrypt
+    const validPassword = await bcrypt.compare(password, admin.password);
+    
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
-    // Update admin token
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: admin.id, email: admin.email },
+      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production-12345',
+      { expiresIn: '24h' }
+    );
+
+    // Update admin token in database
     await db.query(
       'UPDATE admins SET token = $1 WHERE id = $2',
       [token, admin.id]
@@ -31,7 +44,7 @@ router.post('/login', async (req, res) => {
 
     res.json({ 
       token,
-      username: admin.username
+      email: admin.email
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -48,16 +61,23 @@ router.get('/verify', async (req, res) => {
   }
 
   try {
-    const result = await db.query('SELECT * FROM admins WHERE token = $1', [token]);
+    // Verify JWT token
+    const decoded = jwt.verify(
+      token, 
+      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production-12345'
+    );
 
-    if (result.rows.length === 0) {
+    // Check if token exists in database
+    const admins = await db.query('SELECT * FROM admins WHERE token = $1', [token]);
+
+    if (admins.length === 0) {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
-    res.json({ valid: true, username: result.rows[0].username });
+    res.json({ valid: true, email: admins[0].email });
   } catch (error) {
     console.error('Verify error:', error);
-    res.status(500).json({ error: 'Verification failed' });
+    res.status(401).json({ error: 'Invalid token' });
   }
 });
 
