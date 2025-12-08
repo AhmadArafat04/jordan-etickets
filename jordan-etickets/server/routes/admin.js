@@ -41,7 +41,7 @@ router.get('/events', async (req, res) => {
 });
 
 // Create event
-router.post('/events', upload.single('image'), (req, res) => {
+router.post('/events', upload.single('image'), async (req, res) => {
   try {
     const { title, description, date, time, venue, price, quantity } = req.body;
     const image = req.file ? `/images/${req.file.filename}` : null;
@@ -59,7 +59,7 @@ router.post('/events', upload.single('image'), (req, res) => {
 });
 
 // Update event
-router.put('/events/:id', upload.single('image'), (req, res) => {
+router.put('/events/:id', upload.single('image'), async (req, res) => {
   try {
     const { title, description, date, time, venue, price, quantity, status } = req.body;
     const image = req.file ? `/images/${req.file.filename}` : undefined;
@@ -320,12 +320,18 @@ router.post('/orders/:id/reject', async (req, res) => {
 // Get dashboard stats
 router.get('/stats', async (req, res) => {
   try {
-    const totalEvents = await db.prepare('SELECT COUNT(*) as count FROM events').get().count;
-    const activeEvents = await db.prepare('SELECT COUNT(*) as count FROM events WHERE status = ?').get('active').count;
-    const totalOrders = await db.prepare('SELECT COUNT(*) as count FROM orders').get().count;
-    const pendingOrders = await db.prepare('SELECT COUNT(*) as count FROM orders WHERE status = ?').get('pending').count;
-    const totalRevenue = await db.prepare('SELECT SUM(total_amount) as total FROM orders WHERE status = ?').get('approved').total || 0;
-    const totalTickets = await db.prepare('SELECT COUNT(*) as count FROM tickets').get().count;
+    const totalEventsRow = await db.prepare('SELECT COUNT(*) as count FROM events').get();
+    const totalEvents = totalEventsRow.count;
+    const activeEventsRow = await db.prepare('SELECT COUNT(*) as count FROM events WHERE status = ?').get('active');
+    const activeEvents = activeEventsRow.count;
+    const totalOrdersRow = await db.prepare('SELECT COUNT(*) as count FROM orders').get();
+    const totalOrders = totalOrdersRow.count;
+    const pendingOrdersRow = await db.prepare('SELECT COUNT(*) as count FROM orders WHERE status = ?').get('pending');
+    const pendingOrders = pendingOrdersRow.count;
+    const totalRevenueRow = await db.prepare('SELECT SUM(total_amount) as total FROM orders WHERE status = ?').get('approved');
+    const totalRevenue = totalRevenueRow.total || 0;
+    const totalTicketsRow = await db.prepare('SELECT COUNT(*) as count FROM tickets').get();
+    const totalTickets = totalTicketsRow.count;
 
     res.json({
       totalEvents,
@@ -340,4 +346,4 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-export default router;
+export default router;s
