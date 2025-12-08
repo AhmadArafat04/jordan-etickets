@@ -22,7 +22,7 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'payment-' + uniqueSuffix + path.extname(file.originalname));
+    cb(null, 'event-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 
@@ -233,7 +233,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
     const pendingOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
     const approvedOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'approved'");
     const totalRevenueResult = await db.query("SELECT COALESCE(SUM(total_price), 0) as total FROM orders WHERE status = 'approved'");
-    const totalTicketsResult = await db.query('SELECT COALESCE(SUM(num_tickets), 0) as total FROM orders WHERE status = \'approved\'');
+    const totalTicketsResult = await db.query("SELECT COALESCE(SUM(num_tickets), 0) as total FROM orders WHERE status = 'approved'");
 
     res.json({
       totalOrders: parseInt(totalOrdersResult.rows[0].count),
@@ -266,10 +266,10 @@ router.post('/events', requireAdmin, upload.single('image'), async (req, res) =>
 
   try {
     const result = await db.query(
-      `INSERT INTO events (title, description, date, time, location, price, available_tickets, image)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO events (title, description, date, time, location, price, available_tickets, image, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image]
+      [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image, 'active']
     );
 
     res.status(201).json(result.rows[0]);
@@ -281,7 +281,7 @@ router.post('/events', requireAdmin, upload.single('image'), async (req, res) =>
 
 // Update event
 router.put('/events/:id', requireAdmin, upload.single('image'), async (req, res) => {
-  const { title, description, date, time, location, price, available_tickets } = req.body;
+  const { title, description, date, time, location, price, available_tickets, status } = req.body;
   const eventId = req.params.id;
 
   try {
@@ -292,17 +292,17 @@ router.put('/events/:id', requireAdmin, upload.single('image'), async (req, res)
       const image = `/uploads/${req.file.filename}`;
       query = `UPDATE events 
                SET title = $1, description = $2, date = $3, time = $4, location = $5, 
-                   price = $6, available_tickets = $7, image = $8
-               WHERE id = $9
+                   price = $6, available_tickets = $7, image = $8, status = $9
+               WHERE id = $10
                RETURNING *`;
-      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image, eventId];
+      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image, status || 'active', eventId];
     } else {
       query = `UPDATE events 
                SET title = $1, description = $2, date = $3, time = $4, location = $5, 
-                   price = $6, available_tickets = $7
-               WHERE id = $8
+                   price = $6, available_tickets = $7, status = $8
+               WHERE id = $9
                RETURNING *`;
-      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), eventId];
+      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), status || 'active', eventId];
     }
 
     const result = await db.query(query, params);
