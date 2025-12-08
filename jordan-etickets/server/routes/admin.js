@@ -1,349 +1,345 @@
 import express from 'express';
-import multer from 'multer';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import PDFDocument from 'pdfkit';
-import QRCode from 'qrcode';
-import nodemailer from 'nodemailer';
 import db from '../database.js';
-import { authenticateToken, isAdmin } from '../middleware/auth.js';
+import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const router = express.Router();
 
-// All admin routes require authentication
-router.use(authenticateToken);
-router.use(isAdmin);
-
-// Configure multer for event images
+// Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, join(__dirname, '../../public/images'));
+    const uploadDir = path.join(__dirname, '../../public/uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const uniqueName = `event-${Date.now()}${file.originalname.substring(file.originalname.lastIndexOf('.'))}`;
-    cb(null, uniqueName);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'payment-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 
-const upload = multer({ storage });
-
-// Get all events (including inactive)
-router.get('/events', async (req, res) => {
-  try {
-    const events = await db.prepare('SELECT * FROM events ORDER BY created_at DESC').all();
-    res.json(events);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|pdf/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only images and PDFs are allowed'));
+    }
   }
 });
 
-// Create event
-router.post('/events', upload.single('image'), async (req, res) => {
+// Middleware to check admin authentication
+const requireAdmin = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
   try {
-    const { title, description, date, time, venue, price, quantity } = req.body;
-    const image = req.file ? `/images/${req.file.filename}` : null;
+    const result = await db.query('SELECT * FROM admins WHERE token = $1', [token]);
+    
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
 
-    const result = await db.prepare(`
-      INSERT INTO events (title, description, date, time, venue, price, quantity, image)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(title, description, date, time, venue, parseFloat(price), parseInt(quantity), image);
-
-    res.json({ id: result.lastInsertRowid, message: 'Event created successfully' });
+    req.admin = result.rows[0];
+    next();
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Auth error:', error);
+    res.status(500).json({ error: 'Authentication failed' });
+  }
+};
+
+// Get all orders
+router.get('/orders', requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        o.id,
+        o.customer_name,
+        o.customer_email,
+        o.customer_phone,
+        o.customer_age,
+        o.event_id,
+        o.num_tickets,
+        o.total_price,
+        o.payment_method,
+        o.payment_proof,
+        o.status,
+        o.created_at,
+        e.title as event_title,
+        e.date as event_date,
+        e.time as event_time,
+        e.location as event_location
+      FROM orders o
+      LEFT JOIN events e ON o.event_id = e.id
+      ORDER BY o.created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// Get single order
+router.get('/orders/:id', requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        o.*,
+        e.title as event_title,
+        e.date as event_date,
+        e.time as event_time,
+        e.location as event_location,
+        e.price as event_price
+      FROM orders o
+      LEFT JOIN events e ON o.event_id = e.id
+      WHERE o.id = $1
+    `, [req.params.id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching order:', error);
+    res.status(500).json({ error: 'Failed to fetch order' });
+  }
+});
+
+// Update order status
+router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
+  const { status } = req.body;
+  const orderId = req.params.id;
+
+  if (!['pending', 'approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+
+  try {
+    const result = await db.query(
+      'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
+      [status, orderId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ error: 'Failed to update order status' });
+  }
+});
+
+// Generate ticket for approved order
+router.post('/orders/:id/generate-ticket', requireAdmin, async (req, res) => {
+  const orderId = req.params.id;
+
+  try {
+    // Get order details
+    const orderResult = await db.query(`
+      SELECT 
+        o.*,
+        e.title as event_title,
+        e.date as event_date,
+        e.time as event_time,
+        e.location as event_location
+      FROM orders o
+      LEFT JOIN events e ON o.event_id = e.id
+      WHERE o.id = $1
+    `, [orderId]);
+
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const order = orderResult.rows[0];
+
+    if (order.status !== 'approved') {
+      return res.status(400).json({ error: 'Order must be approved first' });
+    }
+
+    // Generate ticket code
+    const ticketCode = `TKT-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+    // Insert ticket
+    const ticketResult = await db.query(
+      `INSERT INTO tickets (order_id, ticket_code, customer_name, event_title, event_date, event_time, event_location, num_tickets)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [
+        orderId,
+        ticketCode,
+        order.customer_name,
+        order.event_title,
+        order.event_date,
+        order.event_time,
+        order.event_location,
+        order.num_tickets
+      ]
+    );
+
+    res.json(ticketResult.rows[0]);
+  } catch (error) {
+    console.error('Error generating ticket:', error);
+    res.status(500).json({ error: 'Failed to generate ticket' });
+  }
+});
+
+// Get all tickets
+router.get('/tickets', requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        t.*,
+        o.customer_email,
+        o.customer_phone
+      FROM tickets t
+      LEFT JOIN orders o ON t.order_id = o.id
+      ORDER BY t.created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching tickets:', error);
+    res.status(500).json({ error: 'Failed to fetch tickets' });
+  }
+});
+
+// Get dashboard statistics
+router.get('/stats', requireAdmin, async (req, res) => {
+  try {
+    const totalOrdersResult = await db.query('SELECT COUNT(*) as count FROM orders');
+    const pendingOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
+    const approvedOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'approved'");
+    const totalRevenueResult = await db.query("SELECT COALESCE(SUM(total_price), 0) as total FROM orders WHERE status = 'approved'");
+    const totalTicketsResult = await db.query('SELECT COALESCE(SUM(num_tickets), 0) as total FROM orders WHERE status = \'approved\'');
+
+    res.json({
+      totalOrders: parseInt(totalOrdersResult.rows[0].count),
+      pendingOrders: parseInt(pendingOrdersResult.rows[0].count),
+      approvedOrders: parseInt(approvedOrdersResult.rows[0].count),
+      totalRevenue: parseFloat(totalRevenueResult.rows[0].total),
+      totalTickets: parseInt(totalTicketsResult.rows[0].total)
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({ error: 'Failed to fetch statistics' });
+  }
+});
+
+// Get all events
+router.get('/events', requireAdmin, async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM events ORDER BY date ASC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching events:', error);
+    res.status(500).json({ error: 'Failed to fetch events' });
+  }
+});
+
+// Create new event
+router.post('/events', requireAdmin, upload.single('image'), async (req, res) => {
+  const { title, description, date, time, location, price, available_tickets } = req.body;
+  const image = req.file ? `/uploads/${req.file.filename}` : null;
+
+  try {
+    const result = await db.query(
+      `INSERT INTO events (title, description, date, time, location, price, available_tickets, image)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating event:', error);
+    res.status(500).json({ error: 'Failed to create event' });
   }
 });
 
 // Update event
-router.put('/events/:id', upload.single('image'), async (req, res) => {
+router.put('/events/:id', requireAdmin, upload.single('image'), async (req, res) => {
+  const { title, description, date, time, location, price, available_tickets } = req.body;
+  const eventId = req.params.id;
+
   try {
-    const { title, description, date, time, venue, price, quantity, status } = req.body;
-    const image = req.file ? `/images/${req.file.filename}` : undefined;
+    let query;
+    let params;
 
-    let query = `
-      UPDATE events 
-      SET title = ?, description = ?, date = ?, time = ?, venue = ?, 
-          price = ?, quantity = ?, status = ?
-    `;
-    const params = [title, description, date, time, venue, parseFloat(price), parseInt(quantity), status];
-
-    if (image) {
-      query += ', image = ?';
-      params.push(image);
+    if (req.file) {
+      const image = `/uploads/${req.file.filename}`;
+      query = `UPDATE events 
+               SET title = $1, description = $2, date = $3, time = $4, location = $5, 
+                   price = $6, available_tickets = $7, image = $8
+               WHERE id = $9
+               RETURNING *`;
+      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image, eventId];
+    } else {
+      query = `UPDATE events 
+               SET title = $1, description = $2, date = $3, time = $4, location = $5, 
+                   price = $6, available_tickets = $7
+               WHERE id = $8
+               RETURNING *`;
+      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), eventId];
     }
 
-    query += ' WHERE id = ?';
-    params.push(req.params.id);
+    const result = await db.query(query, params);
 
-    await db.prepare(query).run(...params);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
 
-    res.json({ message: 'Event updated successfully' });
+    res.json(result.rows[0]);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error updating event:', error);
+    res.status(500).json({ error: 'Failed to update event' });
   }
 });
 
 // Delete event
-router.delete('/events/:id', async (req, res) => {
+router.delete('/events/:id', requireAdmin, async (req, res) => {
   try {
-    await db.prepare('DELETE FROM events WHERE id = ?').run(req.params.id);
+    const result = await db.query('DELETE FROM events WHERE id = $1 RETURNING *', [req.params.id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Delete associated image file if exists
+    if (result.rows[0].image) {
+      const imagePath = path.join(__dirname, '../../public', result.rows[0].image);
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    }
+
     res.json({ message: 'Event deleted successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error deleting event:', error);
+    res.status(500).json({ error: 'Failed to delete event' });
   }
 });
 
-// Get all orders
-router.get('/orders', async (req, res) => {
-  try {
-    const orders = await db.prepare(`
-      SELECT o.*, e.title as event_title
-      FROM orders o
-      JOIN events e ON o.event_id = e.id
-      ORDER BY o.created_at DESC
-    `).all();
-
-    res.json(orders);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Get pending orders
-router.get('/orders/pending', async (req, res) => {
-  try {
-    const orders = await db.prepare(`
-      SELECT o.*, e.title as event_title, e.date, e.time, e.venue
-      FROM orders o
-      JOIN events e ON o.event_id = e.id
-      WHERE o.status = 'pending'
-      ORDER BY o.created_at DESC
-    `).all();
-
-    res.json(orders);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Generate ticket number
-function generateTicketNumber() {
-  return 'TICKET-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6).toUpperCase();
-}
-
-// Generate PDF ticket
-async function generateTicketPDF(ticket, order, event) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
-      const chunks = [];
-
-      doc.on('data', chunk => chunks.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-
-      // Header
-      doc.fontSize(24).text('Jordan E-Tickets', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(20).text(event.title, { align: 'center' });
-      doc.moveDown();
-
-      // Event details
-      doc.fontSize(12);
-      doc.text(`Date: ${event.date}`, { continued: true });
-      doc.text(`    Time: ${event.time}`);
-      doc.text(`Venue: ${event.venue}`);
-      doc.moveDown();
-
-      // Ticket holder
-      doc.text(`Ticket Holder: ${order.customer_name}`);
-      doc.text(`Email: ${order.customer_email}`);
-      doc.text(`Phone: ${order.customer_phone}`);
-      doc.moveDown();
-
-      // Ticket number
-      doc.fontSize(14).text(`Ticket Number: ${ticket.ticket_number}`);
-      doc.moveDown();
-
-      // QR Code
-      const qrImage = await QRCode.toDataURL(ticket.qr_code);
-      const qrBuffer = Buffer.from(qrImage.split(',')[1], 'base64');
-      doc.image(qrBuffer, { fit: [200, 200], align: 'center' });
-      doc.moveDown();
-
-      // Footer
-      doc.fontSize(10).text('Please present this ticket at the venue entrance.', { align: 'center' });
-      doc.text('This ticket is valid for one person only.', { align: 'center' });
-
-      doc.end();
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-// Send ticket email
-async function sendTicketEmail(order, event, ticketPDF) {
-  const transporter = nodemailer.createTransporter({
-    host: process.env.EMAIL_HOST,
-    port: process.env.EMAIL_PORT,
-    secure: false,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS
-    }
-  });
-
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM,
-    to: order.customer_email,
-    subject: `Your Ticket for ${event.title}`,
-    html: `
-      <h2>Your Ticket is Ready!</h2>
-      <p>Dear ${order.customer_name},</p>
-      <p>Thank you for your purchase. Your ticket for <strong>${event.title}</strong> has been confirmed.</p>
-      <p><strong>Event Details:</strong></p>
-      <ul>
-        <li>Date: ${event.date}</li>
-        <li>Time: ${event.time}</li>
-        <li>Venue: ${event.venue}</li>
-      </ul>
-      <p>Please find your ticket(s) attached to this email. You can also download them from our website using your reference number: <strong>${order.reference_number}</strong></p>
-      <p>See you at the event!</p>
-      <p>Best regards,<br>Jordan E-Tickets Team</p>
-    `,
-    attachments: [
-      {
-        filename: `ticket-${order.reference_number}.pdf`,
-        content: ticketPDF
-      }
-    ]
-  });
-}
-
-// Approve order and generate tickets
-router.post('/orders/:id/approve', async (req, res) => {
-  try {
-    const orderId = req.params.id;
-
-    // Get order details
-    const order = await db.prepare(`
-      SELECT o.*, e.title, e.description, e.date, e.time, e.venue, e.price
-      FROM orders o
-      JOIN events e ON o.event_id = e.id
-      WHERE o.id = ?
-    `).get(orderId);
-
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    if (order.status !== 'pending') {
-      return res.status(400).json({ error: 'Order already processed' });
-    }
-
-    // Check if tickets already exist
-    const existingTickets = await db.prepare('SELECT id FROM tickets WHERE order_id = ?').all(orderId);
-    if (existingTickets.length > 0) {
-      return res.status(400).json({ error: 'Tickets already generated for this order' });
-    }
-
-    // Generate tickets
-    const tickets = [];
-    for (let i = 0; i < order.quantity; i++) {
-      const ticket_number = generateTicketNumber();
-      const qr_code = `${process.env.WEBSITE_URL}/verify/${ticket_number}`;
-
-      const result = await db.prepare(`
-        INSERT INTO tickets (order_id, ticket_number, qr_code)
-        VALUES (?, ?, ?)
-      `).run(orderId, ticket_number, qr_code);
-
-      tickets.push({
-        id: result.lastInsertRowid,
-        ticket_number,
-        qr_code
-      });
-    }
-
-    // Update order status
-    await db.prepare('UPDATE orders SET status = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run('approved', orderId);
-
-    // Update event sold count
-    await db.prepare('UPDATE events SET sold = sold + ? WHERE id = ?')
-      .run(order.quantity, order.event_id);
-
-    // Generate and send PDF tickets
-    try {
-      const event = {
-        title: order.title,
-        description: order.description,
-        date: order.date,
-        time: order.time,
-        venue: order.venue
-      };
-
-      for (const ticket of tickets) {
-        const ticketPDF = await generateTicketPDF(ticket, order, event);
-        await sendTicketEmail(order, event, ticketPDF);
-      }
-    } catch (emailError) {
-      console.error('Email sending failed:', emailError);
-      // Continue even if email fails - tickets are still generated
-    }
-
-    res.json({ 
-      message: 'Order approved and tickets generated',
-      tickets: tickets.length
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Reject order
-router.post('/orders/:id/reject', async (req, res) => {
-  try {
-    await db.prepare('UPDATE orders SET status = ? WHERE id = ?').run('rejected', req.params.id);
-    res.json({ message: 'Order rejected' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Get dashboard stats
-router.get('/stats', async (req, res) => {
-  try {
-    const totalEventsRow = await db.prepare('SELECT COUNT(*) as count FROM events').get();
-    const totalEvents = totalEventsRow.count;
-    const activeEventsRow = await db.prepare('SELECT COUNT(*) as count FROM events WHERE status = ?').get('active');
-    const activeEvents = activeEventsRow.count;
-    const totalOrdersRow = await db.prepare('SELECT COUNT(*) as count FROM orders').get();
-    const totalOrders = totalOrdersRow.count;
-    const pendingOrdersRow = await db.prepare('SELECT COUNT(*) as count FROM orders WHERE status = ?').get('pending');
-    const pendingOrders = pendingOrdersRow.count;
-    const totalRevenueRow = await db.prepare('SELECT SUM(total_amount) as total FROM orders WHERE status = ?').get('approved');
-    const totalRevenue = totalRevenueRow.total || 0;
-    const totalTicketsRow = await db.prepare('SELECT COUNT(*) as count FROM tickets').get();
-    const totalTickets = totalTicketsRow.count;
-
-    res.json({
-      totalEvents,
-      activeEvents,
-      totalOrders,
-      pendingOrders,
-      totalRevenue,
-      totalTickets
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-export default router;s
+export default router;
