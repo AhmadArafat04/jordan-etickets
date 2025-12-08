@@ -8,7 +8,6 @@ import authRoutes from './routes/auth.js';
 import eventRoutes from './routes/events.js';
 import orderRoutes from './routes/orders.js';
 import adminRoutes from './routes/admin.js';
-import updateAdminRoute from './routes/update-admin.js';
 
 config();
 
@@ -29,7 +28,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api', updateAdminRoute);
 
 // Serve frontend
 app.get('*', (req, res) => {
