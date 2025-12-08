@@ -169,11 +169,11 @@ router.post('/orders/:id/generate-ticket', requireAdmin, async (req, res) => {
       WHERE o.id = $1
     `, [orderId]);
 
-    if (orderResult.rows.length === 0) {
+    if (orderResult.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const order = orderResult.rows[0];
+    const order = orderResult[0];
 
     if (order.status !== 'approved') {
       return res.status(400).json({ error: 'Order must be approved first' });
@@ -199,7 +199,7 @@ router.post('/orders/:id/generate-ticket', requireAdmin, async (req, res) => {
       ]
     );
 
-    res.json(ticketResult.rows[0]);
+    res.json(ticketResult[0]);
   } catch (error) {
     console.error('Error generating ticket:', error);
     res.status(500).json({ error: 'Failed to generate ticket' });
@@ -236,11 +236,11 @@ router.get('/stats', requireAdmin, async (req, res) => {
     const totalTicketsResult = await db.query("SELECT COALESCE(SUM(num_tickets), 0) as total FROM orders WHERE status = 'approved'");
 
     res.json({
-      totalOrders: parseInt(totalOrdersResult.rows[0].count),
-      pendingOrders: parseInt(pendingOrdersResult.rows[0].count),
-      approvedOrders: parseInt(approvedOrdersResult.rows[0].count),
-      totalRevenue: parseFloat(totalRevenueResult.rows[0].total),
-      totalTickets: parseInt(totalTicketsResult.rows[0].total)
+      totalOrders: parseInt(totalOrdersResult[0].count),
+      pendingOrders: parseInt(pendingOrdersResult[0].count),
+      approvedOrders: parseInt(approvedOrdersResult[0].count),
+      totalRevenue: parseFloat(totalRevenueResult[0].total),
+      totalTickets: parseInt(totalTicketsResult[0].total)
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
