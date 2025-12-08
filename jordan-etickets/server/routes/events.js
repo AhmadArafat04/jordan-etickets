@@ -4,9 +4,9 @@ import db from '../database.js';
 const router = express.Router();
 
 // Get all active events
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const events = db.prepare(`
+    const events = await db.prepare(`
       SELECT id, title, description, date, time, venue, price, 
              quantity, sold, image, status
       FROM events 
@@ -16,14 +16,15 @@ router.get('/', (req, res) => {
 
     res.json(events);
   } catch (error) {
+    console.error('Error loading events:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Get single event
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const event = db.prepare(`
+    const event = await db.prepare(`
       SELECT id, title, description, date, time, venue, price, 
              quantity, sold, image, status
       FROM events 
@@ -36,6 +37,7 @@ router.get('/:id', (req, res) => {
 
     res.json(event);
   } catch (error) {
+    console.error('Error loading event:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
