@@ -10,7 +10,7 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!user) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -45,13 +45,13 @@ router.post('/register', async (req, res) => {
   try {
     const { email, password, name } = req.body;
 
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').get(email);
     if (existingUser) {
       return res.status(400).json({ error: 'Email already registered' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const result = db.prepare(
+    const result = await db.prepare(
       'INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)'
     ).run(email, hashedPassword, name, 'customer');
 
