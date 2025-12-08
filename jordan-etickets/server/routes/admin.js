@@ -229,6 +229,7 @@ router.get('/tickets', requireAdmin, async (req, res) => {
 // Get dashboard statistics
 router.get('/stats', requireAdmin, async (req, res) => {
   try {
+    const totalEventsResult = await db.query('SELECT COUNT(*) as count FROM events');
     const totalOrdersResult = await db.query('SELECT COUNT(*) as count FROM orders');
     const pendingOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
     const approvedOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'approved'");
@@ -236,6 +237,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
     const totalTicketsResult = await db.query("SELECT COALESCE(SUM(num_tickets), 0) as total FROM orders WHERE status = 'approved'");
 
     res.json({
+      totalEvents: parseInt(totalEventsResult[0].count),
       totalOrders: parseInt(totalOrdersResult[0].count),
       pendingOrders: parseInt(pendingOrdersResult[0].count),
       approvedOrders: parseInt(approvedOrdersResult[0].count),
