@@ -53,11 +53,11 @@ const requireAdmin = async (req, res, next) => {
   try {
     const result = await db.query('SELECT * FROM admins WHERE token = $1', [token]);
     
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
-    req.admin = result.rows[0];
+    req.admin = result[0];
     next();
   } catch (error) {
     console.error('Auth error:', error);
@@ -91,7 +91,7 @@ router.get('/orders', requireAdmin, async (req, res) => {
       ORDER BY o.created_at DESC
     `);
 
-    res.json(result.rows);
+    res.json(result);
   } catch (error) {
     console.error('Error fetching orders:', error);
     res.status(500).json({ error: 'Failed to fetch orders' });
@@ -114,11 +114,11 @@ router.get('/orders/:id', requireAdmin, async (req, res) => {
       WHERE o.id = $1
     `, [req.params.id]);
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(result[0]);
   } catch (error) {
     console.error('Error fetching order:', error);
     res.status(500).json({ error: 'Failed to fetch order' });
@@ -140,11 +140,11 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
       [status, orderId]
     );
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(result[0]);
   } catch (error) {
     console.error('Error updating order status:', error);
     res.status(500).json({ error: 'Failed to update order status' });
@@ -219,7 +219,7 @@ router.get('/tickets', requireAdmin, async (req, res) => {
       ORDER BY t.created_at DESC
     `);
 
-    res.json(result.rows);
+    res.json(result);
   } catch (error) {
     console.error('Error fetching tickets:', error);
     res.status(500).json({ error: 'Failed to fetch tickets' });
@@ -252,7 +252,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
 router.get('/events', requireAdmin, async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM events ORDER BY date ASC');
-    res.json(result.rows);
+    res.json(result);
   } catch (error) {
     console.error('Error fetching events:', error);
     res.status(500).json({ error: 'Failed to fetch events' });
@@ -272,7 +272,7 @@ router.post('/events', requireAdmin, upload.single('image'), async (req, res) =>
       [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image, 'active']
     );
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(result[0]);
   } catch (error) {
     console.error('Error creating event:', error);
     res.status(500).json({ error: 'Failed to create event' });
@@ -307,11 +307,11 @@ router.put('/events/:id', requireAdmin, upload.single('image'), async (req, res)
 
     const result = await db.query(query, params);
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(result[0]);
   } catch (error) {
     console.error('Error updating event:', error);
     res.status(500).json({ error: 'Failed to update event' });
@@ -323,13 +323,13 @@ router.delete('/events/:id', requireAdmin, async (req, res) => {
   try {
     const result = await db.query('DELETE FROM events WHERE id = $1 RETURNING *', [req.params.id]);
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
     // Delete associated image file if exists
-    if (result.rows[0].image) {
-      const imagePath = path.join(__dirname, '../../public', result.rows[0].image);
+    if (result[0].image) {
+      const imagePath = path.join(__dirname, '../../public', result[0].image);
       if (fs.existsSync(imagePath)) {
         fs.unlinkSync(imagePath);
       }
