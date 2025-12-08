@@ -31,9 +31,9 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Get all events (including inactive)
-router.get('/events', (req, res) => {
+router.get('/events', async (req, res) => {
   try {
-    const events = db.prepare('SELECT * FROM events ORDER BY created_at DESC').all();
+    const events = await db.prepare('SELECT * FROM events ORDER BY created_at DESC').all();
     res.json(events);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -46,7 +46,7 @@ router.post('/events', upload.single('image'), (req, res) => {
     const { title, description, date, time, venue, price, quantity } = req.body;
     const image = req.file ? `/images/${req.file.filename}` : null;
 
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO events (title, description, date, time, venue, price, quantity, image)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(title, description, date, time, venue, parseFloat(price), parseInt(quantity), image);
@@ -79,7 +79,7 @@ router.put('/events/:id', upload.single('image'), (req, res) => {
     query += ' WHERE id = ?';
     params.push(req.params.id);
 
-    db.prepare(query).run(...params);
+    await db.prepare(query).run(...params);
 
     res.json({ message: 'Event updated successfully' });
   } catch (error) {
@@ -89,9 +89,9 @@ router.put('/events/:id', upload.single('image'), (req, res) => {
 });
 
 // Delete event
-router.delete('/events/:id', (req, res) => {
+router.delete('/events/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM events WHERE id = ?').run(req.params.id);
+    await db.prepare('DELETE FROM events WHERE id = ?').run(req.params.id);
     res.json({ message: 'Event deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -99,9 +99,9 @@ router.delete('/events/:id', (req, res) => {
 });
 
 // Get all orders
-router.get('/orders', (req, res) => {
+router.get('/orders', async (req, res) => {
   try {
-    const orders = db.prepare(`
+    const orders = await db.prepare(`
       SELECT o.*, e.title as event_title
       FROM orders o
       JOIN events e ON o.event_id = e.id
@@ -115,9 +115,9 @@ router.get('/orders', (req, res) => {
 });
 
 // Get pending orders
-router.get('/orders/pending', (req, res) => {
+router.get('/orders/pending', async (req, res) => {
   try {
-    const orders = db.prepare(`
+    const orders = await db.prepare(`
       SELECT o.*, e.title as event_title, e.date, e.time, e.venue
       FROM orders o
       JOIN events e ON o.event_id = e.id
@@ -231,7 +231,7 @@ router.post('/orders/:id/approve', async (req, res) => {
     const orderId = req.params.id;
 
     // Get order details
-    const order = db.prepare(`
+    const order = await db.prepare(`
       SELECT o.*, e.title, e.description, e.date, e.time, e.venue, e.price
       FROM orders o
       JOIN events e ON o.event_id = e.id
@@ -247,7 +247,7 @@ router.post('/orders/:id/approve', async (req, res) => {
     }
 
     // Check if tickets already exist
-    const existingTickets = db.prepare('SELECT id FROM tickets WHERE order_id = ?').all(orderId);
+    const existingTickets = await db.prepare('SELECT id FROM tickets WHERE order_id = ?').all(orderId);
     if (existingTickets.length > 0) {
       return res.status(400).json({ error: 'Tickets already generated for this order' });
     }
@@ -258,7 +258,7 @@ router.post('/orders/:id/approve', async (req, res) => {
       const ticket_number = generateTicketNumber();
       const qr_code = `${process.env.WEBSITE_URL}/verify/${ticket_number}`;
 
-      const result = db.prepare(`
+      const result = await db.prepare(`
         INSERT INTO tickets (order_id, ticket_number, qr_code)
         VALUES (?, ?, ?)
       `).run(orderId, ticket_number, qr_code);
@@ -271,11 +271,11 @@ router.post('/orders/:id/approve', async (req, res) => {
     }
 
     // Update order status
-    db.prepare('UPDATE orders SET status = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?')
+    await db.prepare('UPDATE orders SET status = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run('approved', orderId);
 
     // Update event sold count
-    db.prepare('UPDATE events SET sold = sold + ? WHERE id = ?')
+    await db.prepare('UPDATE events SET sold = sold + ? WHERE id = ?')
       .run(order.quantity, order.event_id);
 
     // Generate and send PDF tickets
@@ -308,9 +308,9 @@ router.post('/orders/:id/approve', async (req, res) => {
 });
 
 // Reject order
-router.post('/orders/:id/reject', (req, res) => {
+router.post('/orders/:id/reject', async (req, res) => {
   try {
-    db.prepare('UPDATE orders SET status = ? WHERE id = ?').run('rejected', req.params.id);
+    await db.prepare('UPDATE orders SET status = ? WHERE id = ?').run('rejected', req.params.id);
     res.json({ message: 'Order rejected' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -318,14 +318,14 @@ router.post('/orders/:id/reject', (req, res) => {
 });
 
 // Get dashboard stats
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const totalEvents = db.prepare('SELECT COUNT(*) as count FROM events').get().count;
-    const activeEvents = db.prepare('SELECT COUNT(*) as count FROM events WHERE status = ?').get('active').count;
-    const totalOrders = db.prepare('SELECT COUNT(*) as count FROM orders').get().count;
-    const pendingOrders = db.prepare('SELECT COUNT(*) as count FROM orders WHERE status = ?').get('pending').count;
-    const totalRevenue = db.prepare('SELECT SUM(total_amount) as total FROM orders WHERE status = ?').get('approved').total || 0;
-    const totalTickets = db.prepare('SELECT COUNT(*) as count FROM tickets').get().count;
+    const totalEvents = await db.prepare('SELECT COUNT(*) as count FROM events').get().count;
+    const activeEvents = await db.prepare('SELECT COUNT(*) as count FROM events WHERE status = ?').get('active').count;
+    const totalOrders = await db.prepare('SELECT COUNT(*) as count FROM orders').get().count;
+    const pendingOrders = await db.prepare('SELECT COUNT(*) as count FROM orders WHERE status = ?').get('pending').count;
+    const totalRevenue = await db.prepare('SELECT SUM(total_amount) as total FROM orders WHERE status = ?').get('approved').total || 0;
+    const totalTickets = await db.prepare('SELECT COUNT(*) as count FROM tickets').get().count;
 
     res.json({
       totalEvents,
