@@ -2,7 +2,12 @@ const API_URL = window.location.origin + '/api';
 
 // Format date from YYYY-MM-DD to DD.MM.YYYY
 function formatDate(dateStr) {
-    const [year, month, day] = dateStr.split('-');
+    if (!dateStr) return 'TBA';
+    // Handle PostgreSQL date format (2025-12-25T00:00:00.000Z or 2025-12-25)
+    const date = new Date(dateStr);
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
     return `${day}.${month}.${year}`;
 }
 
