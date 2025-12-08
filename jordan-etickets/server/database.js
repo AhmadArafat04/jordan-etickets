@@ -21,7 +21,6 @@ const initDatabase = async () => {
         id SERIAL PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
-        name TEXT NOT NULL,
         role TEXT DEFAULT 'customer',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -75,8 +74,8 @@ const initDatabase = async () => {
       const bcrypt = await import('bcryptjs');
       const hashedPassword = await bcrypt.default.hash('admin123', 10);
       await client.query(
-        'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4)',
-        ['admin@etickets.jo', hashedPassword, 'Admin', 'admin']
+        'INSERT INTO users (email, password, role) VALUES ($1, $2, $3)',
+        ['admin@etickets.jo', hashedPassword, 'admin']
       );
       console.log('Default admin created: admin@etickets.jo / admin123');
     }
