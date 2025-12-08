@@ -1,77 +1,80 @@
 import express from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import db from '../database.js';
+import crypto from 'crypto';
 
 const router = express.Router();
 
-// Login
+// Admin login
 router.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+
   try {
-    const { email, password } = req.body;
-
-    const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (!user) {
-      return res.status(400).json({ error: 'Invalid credentials' });
-    }
-
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(400).json({ error: 'Invalid credentials' });
-    }
-
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
+    const result = await db.query(
+      'SELECT * FROM admins WHERE username = $1 AND password = $2',
+      [username, password]
     );
 
-    res.json({
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const admin = result.rows[0];
+
+    // Generate token
+    const token = crypto.randomBytes(32).toString('hex');
+
+    // Update admin token
+    await db.query(
+      'UPDATE admins SET token = $1 WHERE id = $2',
+      [token, admin.id]
+    );
+
+    res.json({ 
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role
-      }
+      username: admin.username
     });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 
-// Register (for customers)
-router.post('/register', async (req, res) => {
-  try {
-    const { email, password, name } = req.body;
+// Verify token
+router.get('/verify', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
 
-    const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email already registered' });
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    const result = await db.query('SELECT * FROM admins WHERE token = $1', [token]);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid token' });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await db.prepare(
-      'INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)'
-    ).run(email, hashedPassword, name, 'customer');
-
-    const token = jwt.sign(
-      { id: result.lastInsertRowid, email, role: 'customer' },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    res.json({
-      token,
-      user: {
-        id: result.lastInsertRowid,
-        email,
-        name,
-        role: 'customer'
-      }
-    });
+    res.json({ valid: true, username: result.rows[0].username });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Verify error:', error);
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+// Logout
+router.post('/logout', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    await db.query('UPDATE admins SET token = NULL WHERE token = $1', [token]);
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ error: 'Logout failed' });
   }
 });
 
