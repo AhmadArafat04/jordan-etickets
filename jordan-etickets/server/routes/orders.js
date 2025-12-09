@@ -46,13 +46,13 @@ const upload = multer({
 // Create new order
 router.post('/', upload.single('paymentProof'), async (req, res) => {
   const { 
-    customerName, 
-    customerEmail, 
-    customerPhone, 
-    customerAge,
-    eventId, 
-    numTickets, 
-    paymentMethod 
+    customer_name: customerName, 
+    customer_email: customerEmail, 
+    customer_phone: customerPhone, 
+    customer_age: customerAge,
+    event_id: eventId, 
+    quantity: numTickets, 
+    payment_method: paymentMethod 
   } = req.body;
 
   try {
