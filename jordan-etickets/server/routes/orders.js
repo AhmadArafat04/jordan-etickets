@@ -120,7 +120,13 @@ router.post('/', upload.single('paymentProof'), async (req, res) => {
       // Don't fail order creation if email fails
     }
 
-    res.status(201).json(createdOrder);
+    // Return formatted response for frontend
+    res.status(201).json({
+      ...createdOrder,
+      reference_number: `ORD-${createdOrder.id}`,
+      cliq_alias: process.env.CLIQ_ALIAS || 'JORDAN-TICKETS',
+      total_amount: totalPrice
+    });
   } catch (error) {
     console.error('Error creating order:', error);
     res.status(500).json({ error: 'Failed to create order' });
