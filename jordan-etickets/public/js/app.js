@@ -90,7 +90,7 @@ async function showCheckoutModal(eventId) {
 
         content.innerHTML = `
             <h2>Checkout - ${event.title}</h2>
-            <form id="checkout-form">
+            <form id="checkout-form"> 
                 <div class="step">
                     <h3>1. Your Information</h3>
                     <div class="form-group">
