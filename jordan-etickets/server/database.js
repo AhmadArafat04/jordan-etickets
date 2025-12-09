@@ -1,10 +1,9 @@
-import pkg from 'pg';
-const { Pool } = pkg;
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import pg from 'pg';
+import dotenv from 'dotenv';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+dotenv.config();
+
+const { Pool } = pg;
 
 // Create PostgreSQL connection pool
 const pool = new Pool({
@@ -13,7 +12,7 @@ const pool = new Pool({
 });
 
 // Initialize database tables
-const initDatabase = async () => {
+async function initDatabase() {
   const client = await pool.connect();
   try {
     await client.query(`
@@ -21,6 +20,7 @@ const initDatabase = async () => {
         id SERIAL PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
+        name TEXT NOT NULL,
         role TEXT DEFAULT 'customer',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -32,7 +32,7 @@ const initDatabase = async () => {
         date TEXT NOT NULL,
         time TEXT NOT NULL,
         venue TEXT NOT NULL,
-        price REAL NOT NULL,
+        price DECIMAL(10,2) NOT NULL,
         quantity INTEGER NOT NULL,
         sold INTEGER DEFAULT 0,
         image TEXT,
@@ -49,7 +49,7 @@ const initDatabase = async () => {
         customer_phone TEXT NOT NULL,
         customer_age INTEGER,
         quantity INTEGER NOT NULL,
-        total_amount REAL NOT NULL,
+        total_amount DECIMAL(10,2) NOT NULL,
         payment_proof TEXT,
         status TEXT DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -74,81 +74,17 @@ const initDatabase = async () => {
       const bcrypt = await import('bcryptjs');
       const hashedPassword = await bcrypt.default.hash('admin123', 10);
       await client.query(
-        'INSERT INTO users (email, password, role) VALUES ($1, $2, $3)',
-        ['admin@etickets.jo', hashedPassword, 'admin']
+        'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4)',
+        ['admin@etickets.jo', hashedPassword, 'Admin', 'admin']
       );
       console.log('Default admin created: admin@etickets.jo / admin123');
     }
   } finally {
     client.release();
   }
-};
+}
 
 // Initialize on startup
 initDatabase().catch(console.error);
 
-// Wrapper object to match SQLite API
-const db = {
-  // Execute a query that returns rows
-  prepare: (sql) => {
-    return {
-      all: async (...params) => {
-        const client = await pool.connect();
-        try {
-          // Convert ? placeholders to $1, $2, etc.
-          let paramIndex = 1;
-          const pgSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
-          const result = await client.query(pgSql, params);
-          return result.rows;
-        } finally {
-          client.release();
-        }
-      },
-      get: async (...params) => {
-        const client = await pool.connect();
-        try {
-          let paramIndex = 1;
-          const pgSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
-          const result = await client.query(pgSql, params);
-          return result.rows[0];
-        } finally {
-          client.release();
-        }
-      },
-      run: async (...params) => {
-        const client = await pool.connect();
-        try {
-          let paramIndex = 1;
-          const pgSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
-          
-          // Handle RETURNING clause for INSERT statements
-          let finalSql = pgSql;
-          if (pgSql.trim().toUpperCase().startsWith('INSERT') && !pgSql.toUpperCase().includes('RETURNING')) {
-            finalSql = pgSql + ' RETURNING id';
-          }
-          
-          const result = await client.query(finalSql, params);
-          return {
-            lastInsertRowid: result.rows[0]?.id,
-            changes: result.rowCount
-          };
-        } finally {
-          client.release();
-        }
-      }
-    };
-  },
-  
-  // Direct query execution
-  query: async (sql, params = []) => {
-    const client = await pool.connect();
-    try {
-      const result = await client.query(sql, params);
-      return result.rows;
-    } finally {
-      client.release();
-    }
-  }
-};
-
-export default db;
+export default pool;
