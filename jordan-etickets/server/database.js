@@ -11,20 +11,13 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Initialize database tables
+// Initialize database tables (safe - won't delete existing data)
 async function initDatabase() {
   const client = await pool.connect();
   try {
-    // Drop existing tables to recreate with correct schema
+    // Create tables only if they don't exist
     await client.query(`
-      DROP TABLE IF EXISTS tickets CASCADE;
-      DROP TABLE IF EXISTS orders CASCADE;
-      DROP TABLE IF EXISTS events CASCADE;
-      DROP TABLE IF EXISTS users CASCADE;
-    `);
-    
-    await client.query(`
-      CREATE TABLE users (
+      CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
@@ -33,7 +26,7 @@ async function initDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      CREATE TABLE events (
+      CREATE TABLE IF NOT EXISTS events (
         id SERIAL PRIMARY KEY,
         title TEXT NOT NULL,
         description TEXT,
@@ -48,7 +41,7 @@ async function initDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      CREATE TABLE orders (
+      CREATE TABLE IF NOT EXISTS orders (
         id SERIAL PRIMARY KEY,
         reference_number TEXT UNIQUE NOT NULL,
         event_id INTEGER NOT NULL,
@@ -65,7 +58,7 @@ async function initDatabase() {
         FOREIGN KEY (event_id) REFERENCES events(id)
       );
 
-      CREATE TABLE tickets (
+      CREATE TABLE IF NOT EXISTS tickets (
         id SERIAL PRIMARY KEY,
         order_id INTEGER NOT NULL,
         ticket_number TEXT UNIQUE NOT NULL,
@@ -76,15 +69,29 @@ async function initDatabase() {
       );
     `);
 
-    // Create default admin user
-    const bcrypt = await import('bcryptjs');
-    const hashedPassword = await bcrypt.default.hash('admin123', 10);
-    await client.query(
-      'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4)',
-      ['admin@etickets.jo', hashedPassword, 'Admin', 'admin']
+    // Check if admin user exists
+    const adminCheck = await client.query(
+      'SELECT * FROM users WHERE email = $1',
+      ['admin@etickets.jo']
     );
-    console.log('✅ Default admin created: admin@etickets.jo / admin123');
-    console.log('✅ Database initialized successfully');
+
+    // Create default admin user only if it doesn't exist
+    if (adminCheck.rows.length === 0) {
+      const bcrypt = await import('bcryptjs');
+      const hashedPassword = await bcrypt.default.hash('admin123', 10);
+      await client.query(
+        'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4)',
+        ['admin@etickets.jo', hashedPassword, 'Admin', 'admin']
+      );
+      console.log('✅ Default admin created: admin@etickets.jo / admin123');
+    } else {
+      console.log('✅ Admin user already exists');
+    }
+
+    console.log('✅ Database initialized successfully (existing data preserved)');
+  } catch (error) {
+    console.error('❌ Database initialization error:', error);
+    throw error;
   } finally {
     client.release();
   }
