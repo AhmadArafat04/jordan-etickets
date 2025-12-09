@@ -68,17 +68,40 @@ async function initDatabase() {
       );
     `);
 
-    // Migration: Add venue column if it doesn't exist
+    // Migration: Add missing columns to events table
     await client.query(`
       DO $$ 
       BEGIN
+        -- Add venue column
         IF NOT EXISTS (
           SELECT 1 FROM information_schema.columns 
           WHERE table_name='events' AND column_name='venue'
         ) THEN
-          ALTER TABLE events ADD COLUMN venue TEXT;
-          UPDATE events SET venue = 'TBD' WHERE venue IS NULL;
-          ALTER TABLE events ALTER COLUMN venue SET NOT NULL;
+          ALTER TABLE events ADD COLUMN venue TEXT DEFAULT 'TBD';
+        END IF;
+        
+        -- Add quantity column
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='events' AND column_name='quantity'
+        ) THEN
+          ALTER TABLE events ADD COLUMN quantity INTEGER DEFAULT 100;
+        END IF;
+        
+        -- Add sold column
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='events' AND column_name='sold'
+        ) THEN
+          ALTER TABLE events ADD COLUMN sold INTEGER DEFAULT 0;
+        END IF;
+        
+        -- Add status column
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='events' AND column_name='status'
+        ) THEN
+          ALTER TABLE events ADD COLUMN status TEXT DEFAULT 'active';
         END IF;
       END $$;
     `);
