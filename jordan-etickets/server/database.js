@@ -68,6 +68,21 @@ async function initDatabase() {
       );
     `);
 
+    // Migration: Add venue column if it doesn't exist
+    await client.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='events' AND column_name='venue'
+        ) THEN
+          ALTER TABLE events ADD COLUMN venue TEXT;
+          UPDATE events SET venue = 'TBD' WHERE venue IS NULL;
+          ALTER TABLE events ALTER COLUMN venue SET NOT NULL;
+        END IF;
+      END $$;
+    `);
+
     // Create default admin user if not exists
     const adminCheck = await client.query('SELECT id FROM users WHERE role = $1', ['admin']);
     if (adminCheck.rows.length === 0) {
