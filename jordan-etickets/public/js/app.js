@@ -2,12 +2,7 @@ const API_URL = window.location.origin + '/api';
 
 // Format date from YYYY-MM-DD to DD.MM.YYYY
 function formatDate(dateStr) {
-    if (!dateStr) return 'TBA';
-    // Handle PostgreSQL date format (2025-12-25T00:00:00.000Z or 2025-12-25)
-    const date = new Date(dateStr);
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
+    const [year, month, day] = dateStr.split('-');
     return `${day}.${month}.${year}`;
 }
 
@@ -95,7 +90,7 @@ async function showCheckoutModal(eventId) {
 
         content.innerHTML = `
             <h2>Checkout - ${event.title}</h2>
-            <form id="checkout-form">
+            <form id="checkout-form" onsubmit="submitOrder(event, ${eventId})">
                 <div class="step">
                     <h3>1. Your Information</h3>
                     <div class="form-group">
@@ -134,11 +129,6 @@ async function showCheckoutModal(eventId) {
             const quantity = parseInt(e.target.value) || 1;
             const total = event.price * quantity;
             document.getElementById('total-amount').textContent = total.toFixed(2);
-        });
-
-        // Handle form submission
-        document.getElementById('checkout-form').addEventListener('submit', (e) => {
-            submitOrder(e, eventId);
         });
 
         modal.classList.add('active');
