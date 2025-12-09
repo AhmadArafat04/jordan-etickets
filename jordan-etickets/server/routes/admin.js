@@ -1,368 +1,365 @@
 import express from 'express';
-import db from '../database.js';
-import { sendTicketEmail } from '../emailService.js';
-import { generateTicketPDF } from '../ticketGenerator.js';
 import multer from 'multer';
-import path from 'path';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-import fs from 'fs';
+import { dirname, join } from 'path';
+import PDFDocument from 'pdfkit';
+import QRCode from 'qrcode';
+import nodemailer from 'nodemailer';
+import pool from '../database.js';
+import { authenticateToken, isAdmin } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const router = express.Router();
 
-// Configure multer for file uploads
+// All admin routes require authentication
+router.use(authenticateToken);
+router.use(isAdmin);
+
+// Configure multer for event images
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../public/uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
+    cb(null, join(__dirname, '../../public/images'));
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'event-' + uniqueSuffix + path.extname(file.originalname));
+    const uniqueName = `event-${Date.now()}${file.originalname.substring(file.originalname.lastIndexOf('.'))}`;
+    cb(null, uniqueName);
   }
 });
 
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|pdf/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Only images and PDFs are allowed'));
-    }
-  }
-});
+const upload = multer({ storage });
 
-// Middleware to check admin authentication
-const requireAdmin = async (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
+// Get all events (including inactive)
+router.get('/events', async (req, res) => {
   try {
-    const result = await db.query('SELECT * FROM admins WHERE token = $1', [token]);
-    
-    if (result.length === 0) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-
-    req.admin = result[0];
-    next();
+    const result = await pool.query('SELECT * FROM events ORDER BY created_at DESC');
+    res.json(result.rows);
   } catch (error) {
-    console.error('Auth error:', error);
-    res.status(500).json({ error: 'Authentication failed' });
-  }
-};
-
-// Get all orders
-router.get('/orders', requireAdmin, async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT 
-        o.id,
-        o.customer_name,
-        o.customer_email,
-        o.customer_phone,
-        o.customer_age,
-        o.event_id,
-        o.num_tickets,
-        o.total_price,
-        o.payment_method,
-        o.payment_proof,
-        o.status,
-        o.created_at,
-        e.title as event_title,
-        e.date as event_date,
-        e.time as event_time,
-        e.location as event_location
-      FROM orders o
-      LEFT JOIN events e ON o.event_id = e.id
-      ORDER BY o.created_at DESC
-    `);
-
-    res.json(result);
-  } catch (error) {
-    console.error('Error fetching orders:', error);
-    res.status(500).json({ error: 'Failed to fetch orders' });
+    console.error('Events fetch error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Get single order
-router.get('/orders/:id', requireAdmin, async (req, res) => {
+// Create event
+router.post('/events', upload.single('image'), async (req, res) => {
   try {
-    const result = await db.query(`
-      SELECT 
-        o.*,
-        e.title as event_title,
-        e.date as event_date,
-        e.time as event_time,
-        e.location as event_location,
-        e.price as event_price
-      FROM orders o
-      LEFT JOIN events e ON o.event_id = e.id
-      WHERE o.id = $1
-    `, [req.params.id]);
+    const { title, description, date, time, venue, price, quantity } = req.body;
+    const image = req.file ? `/images/${req.file.filename}` : null;
 
-    if (result.length === 0) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    res.json(result[0]);
-  } catch (error) {
-    console.error('Error fetching order:', error);
-    res.status(500).json({ error: 'Failed to fetch order' });
-  }
-});
-
-// Update order status with automatic ticket generation and email
-router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
-  const { status } = req.body;
-  const orderId = req.params.id;
-
-  if (!['pending', 'approved', 'rejected'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
-  }
-
-  try {
-    // Update order status
-    const result = await db.query(
-      'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
-      [status, orderId]
+    const result = await pool.query(
+      `INSERT INTO events (title, description, date, time, venue, price, quantity, image)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [title, description, date, time, venue, parseFloat(price), parseInt(quantity), image]
     );
 
-    if (result.length === 0) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    const updatedOrder = result[0];
-
-    // If status is approved, automatically generate ticket and send email
-    if (status === 'approved') {
-      try {
-        // Get full order details with event info
-        const orderDetails = await db.query(`
-          SELECT 
-            o.*,
-            e.title as event_title,
-            e.date as event_date,
-            e.time as event_time,
-            e.location as event_location
-          FROM orders o
-          LEFT JOIN events e ON o.event_id = e.id
-          WHERE o.id = $1
-        `, [orderId]);
-
-        if (orderDetails.length > 0) {
-          const order = orderDetails[0];
-
-          // Generate ticket code
-          const ticketCode = `TKT-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-
-          // Insert ticket into database
-          const ticketResult = await db.query(
-            `INSERT INTO tickets (order_id, ticket_code, customer_name, event_title, event_date, event_time, event_location, num_tickets)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             RETURNING *`,
-            [
-              orderId,
-              ticketCode,
-              order.customer_name,
-              order.event_title,
-              order.event_date,
-              order.event_time,
-              order.event_location,
-              order.num_tickets
-            ]
-          );
-
-          const ticket = ticketResult[0];
-
-          // Generate PDF ticket
-          const ticketPDF = await generateTicketPDF({
-            ticket_code: ticketCode,
-            customer_name: order.customer_name,
-            event_title: order.event_title,
-            event_date: order.event_date,
-            event_time: order.event_time,
-            event_location: order.event_location,
-            num_tickets: order.num_tickets
-          });
-
-          // Send email with ticket
-          await sendTicketEmail({
-            customer_email: order.customer_email,
-            customer_name: order.customer_name,
-            event_title: order.event_title,
-            event_date: order.event_date,
-            event_time: order.event_time,
-            event_location: order.event_location,
-            num_tickets: order.num_tickets,
-            ticket_code: ticketCode
-          }, ticketPDF);
-
-          console.log(`✅ Ticket generated and sent for order ${orderId}`);
-        }
-      } catch (emailError) {
-        console.error('Error generating/sending ticket:', emailError);
-        // Don't fail the status update if email fails
-      }
-    }
-
-    res.json(updatedOrder);
+    res.json({ id: result.rows[0].id, message: 'Event created successfully' });
   } catch (error) {
-    console.error('Error updating order status:', error);
-    res.status(500).json({ error: 'Failed to update order status' });
-  }
-});
-
-// Get all tickets
-router.get('/tickets', requireAdmin, async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT 
-        t.*,
-        o.customer_email,
-        o.customer_phone
-      FROM tickets t
-      LEFT JOIN orders o ON t.order_id = o.id
-      ORDER BY t.created_at DESC
-    `);
-
-    res.json(result);
-  } catch (error) {
-    console.error('Error fetching tickets:', error);
-    res.status(500).json({ error: 'Failed to fetch tickets' });
-  }
-});
-
-// Get dashboard statistics
-router.get('/stats', requireAdmin, async (req, res) => {
-  try {
-    const totalEventsResult = await db.query('SELECT COUNT(*) as count FROM events');
-    const totalOrdersResult = await db.query('SELECT COUNT(*) as count FROM orders');
-    const pendingOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
-    const approvedOrdersResult = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'approved'");
-    const totalRevenueResult = await db.query("SELECT COALESCE(SUM(total_price), 0) as total FROM orders WHERE status = 'approved'");
-    const totalTicketsResult = await db.query("SELECT COALESCE(SUM(num_tickets), 0) as total FROM orders WHERE status = 'approved'");
-
-    res.json({
-      totalEvents: parseInt(totalEventsResult[0].count),
-      totalOrders: parseInt(totalOrdersResult[0].count),
-      pendingOrders: parseInt(pendingOrdersResult[0].count),
-      approvedOrders: parseInt(approvedOrdersResult[0].count),
-      totalRevenue: parseFloat(totalRevenueResult[0].total),
-      totalTickets: parseInt(totalTicketsResult[0].total)
-    });
-  } catch (error) {
-    console.error('Error fetching stats:', error);
-    res.status(500).json({ error: 'Failed to fetch statistics' });
-  }
-});
-
-// Get all events
-router.get('/events', requireAdmin, async (req, res) => {
-  try {
-    const result = await db.query('SELECT * FROM events ORDER BY date ASC');
-    res.json(result);
-  } catch (error) {
-    console.error('Error fetching events:', error);
-    res.status(500).json({ error: 'Failed to fetch events' });
-  }
-});
-
-// Create new event
-router.post('/events', requireAdmin, upload.single('image'), async (req, res) => {
-  const { title, description, date, time, location, price, available_tickets } = req.body;
-  const image = req.file ? `/uploads/${req.file.filename}` : null;
-
-  try {
-    const result = await db.query(
-      `INSERT INTO events (title, description, date, time, location, price, available_tickets, image, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image, 'active']
-    );
-
-    res.status(201).json(result[0]);
-  } catch (error) {
-    console.error('Error creating event:', error);
-    res.status(500).json({ error: 'Failed to create event' });
+    console.error('Event creation error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Update event
-router.put('/events/:id', requireAdmin, upload.single('image'), async (req, res) => {
-  const { title, description, date, time, location, price, available_tickets, status } = req.body;
-  const eventId = req.params.id;
-
+router.put('/events/:id', upload.single('image'), async (req, res) => {
   try {
-    let query;
-    let params;
+    const { title, description, date, time, venue, price, quantity, status } = req.body;
+    const image = req.file ? `/images/${req.file.filename}` : undefined;
 
-    if (req.file) {
-      const image = `/uploads/${req.file.filename}`;
-      query = `UPDATE events 
-               SET title = $1, description = $2, date = $3, time = $4, location = $5, 
-                   price = $6, available_tickets = $7, image = $8, status = $9
-               WHERE id = $10
-               RETURNING *`;
-      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), image, status || 'active', eventId];
+    let query = `
+      UPDATE events 
+      SET title = $1, description = $2, date = $3, time = $4, venue = $5, 
+          price = $6, quantity = $7, status = $8
+    `;
+    const params = [title, description, date, time, venue, parseFloat(price), parseInt(quantity), status];
+
+    if (image) {
+      query += ', image = $9 WHERE id = $10';
+      params.push(image, req.params.id);
     } else {
-      query = `UPDATE events 
-               SET title = $1, description = $2, date = $3, time = $4, location = $5, 
-                   price = $6, available_tickets = $7, status = $8
-               WHERE id = $9
-               RETURNING *`;
-      params = [title, description, date, time, location, parseFloat(price), parseInt(available_tickets), status || 'active', eventId];
+      query += ' WHERE id = $9';
+      params.push(req.params.id);
     }
 
-    const result = await db.query(query, params);
+    await pool.query(query, params);
 
-    if (result.length === 0) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-
-    res.json(result[0]);
+    res.json({ message: 'Event updated successfully' });
   } catch (error) {
-    console.error('Error updating event:', error);
-    res.status(500).json({ error: 'Failed to update event' });
+    console.error('Event update error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Delete event
-router.delete('/events/:id', requireAdmin, async (req, res) => {
+router.delete('/events/:id', async (req, res) => {
   try {
-    const result = await db.query('DELETE FROM events WHERE id = $1 RETURNING *', [req.params.id]);
-
-    if (result.length === 0) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-
-    // Delete associated image file if exists
-    if (result[0].image) {
-      const imagePath = path.join(__dirname, '../../public', result[0].image);
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
-    }
-
+    await pool.query('DELETE FROM events WHERE id = $1', [req.params.id]);
     res.json({ message: 'Event deleted successfully' });
   } catch (error) {
-    console.error('Error deleting event:', error);
-    res.status(500).json({ error: 'Failed to delete event' });
+    console.error('Event delete error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get all orders
+router.get('/orders', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT o.*, e.title as event_title
+      FROM orders o
+      JOIN events e ON o.event_id = e.id
+      ORDER BY o.created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Orders fetch error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get pending orders
+router.get('/orders/pending', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT o.*, e.title as event_title, e.date, e.time, e.venue
+      FROM orders o
+      JOIN events e ON o.event_id = e.id
+      WHERE o.status = $1
+      ORDER BY o.created_at DESC
+    `, ['pending']);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Pending orders fetch error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Generate ticket number
+function generateTicketNumber() {
+  return 'TICKET-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+}
+
+// Generate PDF ticket
+async function generateTicketPDF(ticket, order, event) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+
+      // Header
+      doc.fontSize(24).text('مرحبا تسعينات', { align: 'center' });
+      doc.moveDown();
+      doc.fontSize(20).text(event.title, { align: 'center' });
+      doc.moveDown();
+
+      // Event details
+      doc.fontSize(12);
+      doc.text(`Date: ${event.date}`, { continued: true });
+      doc.text(`    Time: ${event.time}`);
+      doc.text(`Venue: ${event.venue}`);
+      doc.moveDown();
+
+      // Ticket holder
+      doc.text(`Ticket Holder: ${order.customer_name}`);
+      doc.text(`Email: ${order.customer_email}`);
+      doc.text(`Phone: ${order.customer_phone}`);
+      doc.moveDown();
+
+      // Ticket number
+      doc.fontSize(14).text(`Ticket Number: ${ticket.ticket_number}`);
+      doc.moveDown();
+
+      // QR Code
+      const qrImage = await QRCode.toDataURL(ticket.qr_code);
+      const qrBuffer = Buffer.from(qrImage.split(',')[1], 'base64');
+      doc.image(qrBuffer, { fit: [200, 200], align: 'center' });
+      doc.moveDown();
+
+      // Footer
+      doc.fontSize(10).text('Please present this ticket at the venue entrance.', { align: 'center' });
+      doc.text('This ticket is valid for one person only.', { align: 'center' });
+
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+// Send ticket email
+async function sendTicketEmail(order, event, ticketPDF) {
+  const transporter = nodemailer.createTransporter({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS
+    }
+  });
+
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: order.customer_email,
+    subject: `Your Ticket for ${event.title}`,
+    html: `
+      <h2>Your Ticket is Ready!</h2>
+      <p>Dear ${order.customer_name},</p>
+      <p>Thank you for your purchase. Your ticket for <strong>${event.title}</strong> has been confirmed.</p>
+      <p><strong>Event Details:</strong></p>
+      <ul>
+        <li>Date: ${event.date}</li>
+        <li>Time: ${event.time}</li>
+        <li>Venue: ${event.venue}</li>
+      </ul>
+      <p>Please find your ticket(s) attached to this email. You can also download them from our website using your reference number: <strong>${order.reference_number}</strong></p>
+      <p>See you at the event!</p>
+      <p>Best regards,<br>مرحبا تسعينات Team</p>
+    `,
+    attachments: [
+      {
+        filename: `ticket-${order.reference_number}.pdf`,
+        content: ticketPDF
+      }
+    ]
+  });
+}
+
+// Approve order and generate tickets
+router.post('/orders/:id/approve', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    const orderId = req.params.id;
+
+    // Get order details
+    const orderResult = await client.query(`
+      SELECT o.*, e.title, e.description, e.date, e.time, e.venue, e.price
+      FROM orders o
+      JOIN events e ON o.event_id = e.id
+      WHERE o.id = $1
+    `, [orderId]);
+
+    if (orderResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const order = orderResult.rows[0];
+
+    if (order.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Order already processed' });
+    }
+
+    // Check if tickets already exist
+    const existingTickets = await client.query('SELECT id FROM tickets WHERE order_id = $1', [orderId]);
+    if (existingTickets.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Tickets already generated for this order' });
+    }
+
+    // Generate tickets
+    const tickets = [];
+    for (let i = 0; i < order.quantity; i++) {
+      const ticket_number = generateTicketNumber();
+      const qr_code = `${process.env.WEBSITE_URL || 'https://jordan-etickets-production.up.railway.app'}/verify/${ticket_number}`;
+
+      const result = await client.query(
+        `INSERT INTO tickets (order_id, ticket_number, qr_code)
+         VALUES ($1, $2, $3) RETURNING id`,
+        [orderId, ticket_number, qr_code]
+      );
+
+      tickets.push({
+        id: result.rows[0].id,
+        ticket_number,
+        qr_code
+      });
+    }
+
+    // Update order status
+    await client.query(
+      'UPDATE orders SET status = $1, approved_at = CURRENT_TIMESTAMP WHERE id = $2',
+      ['approved', orderId]
+    );
+
+    // Update event sold count
+    await client.query(
+      'UPDATE events SET sold = sold + $1 WHERE id = $2',
+      [order.quantity, order.event_id]
+    );
+
+    await client.query('COMMIT');
+
+    // Generate and send PDF tickets
+    try {
+      const event = {
+        title: order.title,
+        description: order.description,
+        date: order.date,
+        time: order.time,
+        venue: order.venue
+      };
+
+      for (const ticket of tickets) {
+        const ticketPDF = await generateTicketPDF(ticket, order, event);
+        await sendTicketEmail(order, event, ticketPDF);
+      }
+    } catch (emailError) {
+      console.error('Email sending failed:', emailError);
+      // Continue even if email fails - tickets are still generated
+    }
+
+    res.json({ 
+      message: 'Order approved and tickets generated',
+      tickets: tickets.length
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Order approval error:', error);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Reject order
+router.post('/orders/:id/reject', async (req, res) => {
+  try {
+    await pool.query('UPDATE orders SET status = $1 WHERE id = $2', ['rejected', req.params.id]);
+    res.json({ message: 'Order rejected' });
+  } catch (error) {
+    console.error('Order rejection error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get dashboard stats
+router.get('/stats', async (req, res) => {
+  try {
+    const totalEventsResult = await pool.query('SELECT COUNT(*) as count FROM events');
+    const activeEventsResult = await pool.query('SELECT COUNT(*) as count FROM events WHERE status = $1', ['active']);
+    const totalOrdersResult = await pool.query('SELECT COUNT(*) as count FROM orders');
+    const pendingOrdersResult = await pool.query('SELECT COUNT(*) as count FROM orders WHERE status = $1', ['pending']);
+    const totalRevenueResult = await pool.query('SELECT SUM(total_amount) as total FROM orders WHERE status = $1', ['approved']);
+    const totalTicketsResult = await pool.query('SELECT COUNT(*) as count FROM tickets');
+
+    res.json({
+      totalEvents: parseInt(totalEventsResult.rows[0].count),
+      activeEvents: parseInt(activeEventsResult.rows[0].count),
+      totalOrders: parseInt(totalOrdersResult.rows[0].count),
+      pendingOrders: parseInt(pendingOrdersResult.rows[0].count),
+      totalRevenue: parseFloat(totalRevenueResult.rows[0].total) || 0,
+      totalTickets: parseInt(totalTicketsResult.rows[0].count)
+    });
+  } catch (error) {
+    console.error('Stats fetch error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
