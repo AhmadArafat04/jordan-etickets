@@ -4,9 +4,7 @@
   "description": "E-ticket platform for Jordan events with CliQ payment verification",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
+    "build": "echo 'No build needed for Express server'",
     "server": "node server/index.js",
     "start": "node server/index.js"
   },
@@ -21,8 +19,5 @@
     "multer": "^1.4.5-lts.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1"
-  },
-  "devDependencies": {
-    "vite": "^5.0.8"
   }
 }
