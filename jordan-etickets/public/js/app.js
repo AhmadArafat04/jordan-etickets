@@ -79,18 +79,24 @@ function startCheckout(eventId) {
     showCheckoutModal(eventId);
 }
 
+// Global variable to store current event ID for form submission
+window.currentCheckoutEventId = null;
+
 // Show checkout modal
 async function showCheckoutModal(eventId) {
     try {
         const response = await fetch(`${API_URL}/events/${eventId}`);
         const event = await response.json();
+        
+        // Store event ID globally
+        window.currentCheckoutEventId = eventId;
 
         const modal = document.getElementById('checkout-modal');
         const content = document.getElementById('checkout-content');
 
         content.innerHTML = `
             <h2>Checkout - ${event.title}</h2>
-            <form id="checkout-form"> 
+            <form id="checkout-form" onsubmit="return handleCheckoutSubmit(event);">
                 <div class="step">
                     <h3>1. Your Information</h3>
                     <div class="form-group">
@@ -111,7 +117,7 @@ async function showCheckoutModal(eventId) {
                     </div>
                     <div class="form-group">
                         <label>Number of Tickets *</label>
-                        <input type="number" id="ticket-quantity" min="1" max="${event.quantity - event.sold}" value="1" required>
+                        <input type="number" id="ticket-quantity" min="1" max="${event.quantity - event.sold}" value="1" required onchange="updateTotal(${event.price})">
                     </div>
                 </div>
                 <div class="step">
@@ -124,18 +130,6 @@ async function showCheckoutModal(eventId) {
             </form>
         `;
 
-        // Update total when quantity changes
-        document.getElementById('ticket-quantity').addEventListener('input', (e) => {
-            const quantity = parseInt(e.target.value) || 1;
-            const total = event.price * quantity;
-            document.getElementById('total-amount').textContent = total.toFixed(2);
-        });
-
-        // Add form submit event listener
-        document.getElementById('checkout-form').addEventListener('submit', (e) => {
-            submitOrder(e, eventId);
-        });
-
         modal.classList.add('active');
     } catch (error) {
         console.error('Error:', error);
@@ -143,10 +137,22 @@ async function showCheckoutModal(eventId) {
     }
 }
 
-// Submit order
-async function submitOrder(e, eventId) {
-    e.preventDefault();
+// Update total amount when quantity changes
+function updateTotal(price) {
+    const quantity = parseInt(document.getElementById('ticket-quantity').value) || 1;
+    const total = price * quantity;
+    document.getElementById('total-amount').textContent = total.toFixed(2);
+}
 
+// Handle checkout form submission
+function handleCheckoutSubmit(e) {
+    e.preventDefault();
+    submitOrder(window.currentCheckoutEventId);
+    return false;
+}
+
+// Submit order
+async function submitOrder(eventId) {
     const orderData = {
         event_id: eventId,
         customer_name: document.getElementById('customer-name').value,
@@ -182,6 +188,9 @@ function showPaymentInstructions(orderData) {
 
     const modal = document.getElementById('status-modal');
     const content = document.getElementById('status-content');
+    
+    // Store reference number globally for proof upload
+    window.currentOrderReference = orderData.reference_number;
 
     content.innerHTML = `
         <h2>✅ Order Created!</h2>
@@ -203,7 +212,7 @@ function showPaymentInstructions(orderData) {
         <div class="step" style="margin-top: 2rem;">
             <h3>Upload Payment Proof (Optional)</h3>
             <p style="color: #666; margin-bottom: 1rem;">You can upload a screenshot of your payment, or just include the reference number in your CliQ payment notes.</p>
-            <form id="proof-form">
+            <form id="proof-form" onsubmit="return handleProofUpload(event);">
                 <div class="form-group">
                     <input type="file" id="payment-proof" accept="image/*">
                 </div>
@@ -218,23 +227,18 @@ function showPaymentInstructions(orderData) {
         <button class="btn btn-primary" onclick="location.reload()" style="margin-top: 1rem;">Back to Events</button>
     `;
 
-    // Add form submit event listener for payment proof
-    setTimeout(() => {
-        const proofForm = document.getElementById('proof-form');
-        if (proofForm) {
-            proofForm.addEventListener('submit', (e) => {
-                uploadProof(e, orderData.reference_number);
-            });
-        }
-    }, 100);
-
     modal.classList.add('active');
 }
 
-// Upload payment proof
-async function uploadProof(e, reference) {
+// Handle proof upload form submission
+function handleProofUpload(e) {
     e.preventDefault();
+    uploadProof(window.currentOrderReference);
+    return false;
+}
 
+// Upload payment proof
+async function uploadProof(reference) {
     const fileInput = document.getElementById('payment-proof');
     if (!fileInput.files[0]) {
         alert('Please select a file');
