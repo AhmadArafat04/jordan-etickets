@@ -29,12 +29,12 @@ app.use('/api/events', eventRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/admin', adminRoutes);
 
-// Serve frontend
-app.get('*', (req, res) => {
-  res.sendFile(join(__dirname, '../public/index.html'));
+// Serve frontend - ONLY for the root path, not all paths
+app.get('/', (req, res) => {
+    res.sendFile(join(__dirname, '../public/index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Visit: http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Visit: http://localhost:${PORT}`);
 });
