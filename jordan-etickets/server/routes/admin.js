@@ -1,5 +1,7 @@
 import express from 'express';
 import db from '../database.js';
+import { sendTicketEmail } from '../emailService.js';
+import { generateTicketPDF } from '../ticketGenerator.js';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -125,7 +127,7 @@ router.get('/orders/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// Update order status
+// Update order status with automatic ticket generation and email
 router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
   const { status } = req.body;
   const orderId = req.params.id;
@@ -135,6 +137,7 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
   }
 
   try {
+    // Update order status
     const result = await db.query(
       'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
       [status, orderId]
@@ -144,65 +147,84 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    res.json(result[0]);
+    const updatedOrder = result[0];
+
+    // If status is approved, automatically generate ticket and send email
+    if (status === 'approved') {
+      try {
+        // Get full order details with event info
+        const orderDetails = await db.query(`
+          SELECT 
+            o.*,
+            e.title as event_title,
+            e.date as event_date,
+            e.time as event_time,
+            e.location as event_location
+          FROM orders o
+          LEFT JOIN events e ON o.event_id = e.id
+          WHERE o.id = $1
+        `, [orderId]);
+
+        if (orderDetails.length > 0) {
+          const order = orderDetails[0];
+
+          // Generate ticket code
+          const ticketCode = `TKT-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+          // Insert ticket into database
+          const ticketResult = await db.query(
+            `INSERT INTO tickets (order_id, ticket_code, customer_name, event_title, event_date, event_time, event_location, num_tickets)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING *`,
+            [
+              orderId,
+              ticketCode,
+              order.customer_name,
+              order.event_title,
+              order.event_date,
+              order.event_time,
+              order.event_location,
+              order.num_tickets
+            ]
+          );
+
+          const ticket = ticketResult[0];
+
+          // Generate PDF ticket
+          const ticketPDF = await generateTicketPDF({
+            ticket_code: ticketCode,
+            customer_name: order.customer_name,
+            event_title: order.event_title,
+            event_date: order.event_date,
+            event_time: order.event_time,
+            event_location: order.event_location,
+            num_tickets: order.num_tickets
+          });
+
+          // Send email with ticket
+          await sendTicketEmail({
+            customer_email: order.customer_email,
+            customer_name: order.customer_name,
+            event_title: order.event_title,
+            event_date: order.event_date,
+            event_time: order.event_time,
+            event_location: order.event_location,
+            num_tickets: order.num_tickets,
+            ticket_code: ticketCode
+          }, ticketPDF);
+
+          console.log(`✅ Ticket generated and sent for order ${orderId}`);
+        }
+      } catch (emailError) {
+        console.error('Error generating/sending ticket:', emailError);
+        // Don't fail the status update if email fails
+      }
+    }
+
+    res.json(updatedOrder);
   } catch (error) {
     console.error('Error updating order status:', error);
     res.status(500).json({ error: 'Failed to update order status' });
-  }
-});
-
-// Generate ticket for approved order
-router.post('/orders/:id/generate-ticket', requireAdmin, async (req, res) => {
-  const orderId = req.params.id;
-
-  try {
-    // Get order details
-    const orderResult = await db.query(`
-      SELECT 
-        o.*,
-        e.title as event_title,
-        e.date as event_date,
-        e.time as event_time,
-        e.location as event_location
-      FROM orders o
-      LEFT JOIN events e ON o.event_id = e.id
-      WHERE o.id = $1
-    `, [orderId]);
-
-    if (orderResult.length === 0) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    const order = orderResult[0];
-
-    if (order.status !== 'approved') {
-      return res.status(400).json({ error: 'Order must be approved first' });
-    }
-
-    // Generate ticket code
-    const ticketCode = `TKT-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-
-    // Insert ticket
-    const ticketResult = await db.query(
-      `INSERT INTO tickets (order_id, ticket_code, customer_name, event_title, event_date, event_time, event_location, num_tickets)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [
-        orderId,
-        ticketCode,
-        order.customer_name,
-        order.event_title,
-        order.event_date,
-        order.event_time,
-        order.event_location,
-        order.num_tickets
-      ]
-    );
-
-    res.json(ticketResult[0]);
-  } catch (error) {
-    console.error('Error generating ticket:', error);
-    res.status(500).json({ error: 'Failed to generate ticket' });
   }
 });
 
