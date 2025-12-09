@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import nodemailer from 'nodemailer';
+const { createTransport } = nodemailer;
 import pool from '../database.js';
 import { authenticateToken, isAdmin } from '../middleware/auth.js';
 
@@ -193,7 +194,7 @@ async function generateTicketPDF(ticket, order, event) {
 
 // Send ticket email
 async function sendTicketEmail(order, event, ticketPDF) {
-  const transporter = nodemailer.createTransporter({
+  const transporter = createTransport({
     service: 'gmail',
     auth: {
       user: process.env.EMAIL_USER,
