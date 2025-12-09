@@ -1,104 +1,82 @@
 import express from 'express';
-import db from '../database.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import pool from '../database.js';
 
 const router = express.Router();
 
-// Admin login
+// Login
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-
   try {
-    // Query using email (not username)
-    const admins = await db.query(
-      'SELECT * FROM admins WHERE email = $1',
-      [email]
-    );
+    const { email, password } = req.body;
 
-    if (admins.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    const admin = admins[0];
-
-    // Compare password using bcrypt
-    const validPassword = await bcrypt.compare(password, admin.password);
-    
+    const user = result.rows[0];
+    const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    // Generate JWT token
     const token = jwt.sign(
-      { id: admin.id, email: admin.email },
-      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production-12345',
+      { id: user.id, email: user.email, role: user.role },
+      process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '24h' }
     );
 
-    // Update admin token in database
-    await db.query(
-      'UPDATE admins SET token = $1 WHERE id = $2',
-      [token, admin.id]
-    );
-
-    res.json({ 
+    res.json({
       token,
       user: {
-        id: admin.id,
-        email: admin.email,
-        role: admin.role || 'admin'
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role
       }
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed' });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Verify token
-router.get('/verify', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
+// Register (for customers)
+router.post('/register', async (req, res) => {
   try {
-    // Verify JWT token
-    const decoded = jwt.verify(
-      token, 
-      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production-12345'
-    );
+    const { email, password, name } = req.body;
 
-    // Check if token exists in database
-    const admins = await db.query('SELECT * FROM admins WHERE token = $1', [token]);
-
-    if (admins.length === 0) {
-      return res.status(401).json({ error: 'Invalid token' });
+    const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'Email already registered' });
     }
 
-    res.json({ valid: true, email: admins[0].email });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4) RETURNING id',
+      [email, hashedPassword, name, 'customer']
+    );
+
+    const userId = result.rows[0].id;
+    const token = jwt.sign(
+      { id: userId, email, role: 'customer' },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: userId,
+        email,
+        name,
+        role: 'customer'
+      }
+    });
   } catch (error) {
-    console.error('Verify error:', error);
-    res.status(401).json({ error: 'Invalid token' });
-  }
-});
-
-// Logout
-router.post('/logout', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  try {
-    await db.query('UPDATE admins SET token = NULL WHERE token = $1', [token]);
-    res.json({ message: 'Logged out successfully' });
-  } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json({ error: 'Logout failed' });
+    console.error('Register error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
