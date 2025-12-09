@@ -95,7 +95,7 @@ async function showCheckoutModal(eventId) {
 
         content.innerHTML = `
             <h2>Checkout - ${event.title}</h2>
-            <form id="checkout-form" onsubmit="submitOrder(event, ${eventId})">
+            <form id="checkout-form">
                 <div class="step">
                     <h3>1. Your Information</h3>
                     <div class="form-group">
@@ -134,6 +134,11 @@ async function showCheckoutModal(eventId) {
             const quantity = parseInt(e.target.value) || 1;
             const total = event.price * quantity;
             document.getElementById('total-amount').textContent = total.toFixed(2);
+        });
+
+        // Handle form submission
+        document.getElementById('checkout-form').addEventListener('submit', (e) => {
+            submitOrder(e, eventId);
         });
 
         modal.classList.add('active');
