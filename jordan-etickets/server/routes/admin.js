@@ -4,8 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
-import nodemailer from 'nodemailer';
-const { createTransport } = nodemailer;
+import { Resend } from 'resend';
 import pool from '../database.js';
 import { authenticateToken, isAdmin } from '../middleware/auth.js';
 
@@ -192,38 +191,80 @@ async function generateTicketPDF(ticket, order, event) {
   });
 }
 
-// Send ticket email
+// Send ticket email using Resend
 async function sendTicketEmail(order, event, ticketPDF) {
-  const transporter = createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS
-    }
-  });
+  const resend = new Resend(process.env.RESEND_API_KEY);
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_USER,
+  await resend.emails.send({
+    from: 'Jordan eTickets <onboarding@resend.dev>', // Will use Resend's domain initially
     to: order.customer_email,
-    subject: `Your Ticket for ${event.title}`,
+    subject: `Your Ticket for ${event.title} - مرحبا تسعينات`,
     html: `
-      <h2>Your Ticket is Ready!</h2>
-      <p>Dear ${order.customer_name},</p>
-      <p>Thank you for your purchase. Your ticket for <strong>${event.title}</strong> has been confirmed.</p>
-      <p><strong>Event Details:</strong></p>
-      <ul>
-        <li>Date: ${event.date}</li>
-        <li>Time: ${event.time}</li>
-        <li>Venue: ${event.venue}</li>
-      </ul>
-      <p>Please find your ticket(s) attached to this email. You can also download them from our website using your reference number: <strong>${order.reference_number}</strong></p>
-      <p>See you at the event!</p>
-      <p>Best regards,<br>مرحبا تسعينات Team</p>
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ar">
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; direction: rtl; }
+          .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
+          .content { padding: 30px; }
+          .ticket-info { background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 20px 0; }
+          .info-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #dee2e6; }
+          .info-row:last-child { border-bottom: none; }
+          .label { font-weight: bold; color: #495057; }
+          .value { color: #212529; }
+          .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; font-size: 14px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>🎟️ تذكرتك جاهزة!</h1>
+          </div>
+          <div class="content">
+            <p>عزيزي/عزيزتي ${order.customer_name}،</p>
+            <p>شكراً لشرائك تذكرة لحدث <strong>${event.title}</strong>. تم تأكيد طلبك بنجاح!</p>
+            
+            <div class="ticket-info">
+              <h3 style="margin-top: 0;">تفاصيل الحدث:</h3>
+              <div class="info-row">
+                <span class="label">📅 التاريخ:</span>
+                <span class="value">${event.date}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">🕐 الوقت:</span>
+                <span class="value">${event.time}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">📍 المكان:</span>
+                <span class="value">${event.venue}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">🎫 عدد التذاكر:</span>
+                <span class="value">${order.num_tickets}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">🔢 رقم المرجع:</span>
+                <span class="value">${order.reference_number}</span>
+              </div>
+            </div>
+
+            <p>ستجد تذاكرك مرفقة في هذا البريد الإلكتروني. يمكنك أيضاً تنزيلها من موقعنا باستخدام رقم المرجع.</p>
+            <p><strong>نراك في الحدث! 🎉</strong></p>
+          </div>
+          <div class="footer">
+            <p>مع تحيات فريق مرحبا تسعينات<br>Jordan eTickets</p>
+            <p style="font-size: 12px; color: #999;">هذا البريد الإلكتروني تم إرساله تلقائياً، يرجى عدم الرد عليه.</p>
+          </div>
+        </div>
+      </body>
+      </html>
     `,
     attachments: [
       {
         filename: `ticket-${order.reference_number}.pdf`,
-        content: ticketPDF
+        content: ticketPDF.toString('base64')
       }
     ]
   });
