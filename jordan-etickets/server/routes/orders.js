@@ -6,7 +6,6 @@ import pool from '../database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
 const router = express.Router();
 
 // Configure multer for file uploads
@@ -24,14 +23,14 @@ const upload = multer({ storage });
 
 // Generate unique reference number
 function generateReference() {
-  return 'TKT-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+  return 'ORD-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 }
 
 // Create new order
 router.post('/', async (req, res) => {
   try {
     const { event_id, customer_name, customer_email, customer_phone, customer_age, quantity } = req.body;
-
+    
     // Get event details
     const eventResult = await pool.query(
       'SELECT * FROM events WHERE id = $1 AND status = $2',
@@ -41,14 +40,14 @@ router.post('/', async (req, res) => {
     if (eventResult.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
-
+    
     const event = eventResult.rows[0];
-
+    
     // Check availability
     if (event.quantity - event.sold < quantity) {
       return res.status(400).json({ error: 'Not enough tickets available' });
     }
-
+    
     // Generate unique reference number
     let reference_number;
     let attempts = 0;
@@ -58,10 +57,10 @@ router.post('/', async (req, res) => {
       if (check.rows.length === 0) break;
       attempts++;
     } while (attempts < 10);
-
+    
     // Calculate total
     const total_amount = parseFloat(event.price) * quantity;
-
+    
     // Create order
     const result = await pool.query(
       `INSERT INTO orders (reference_number, event_id, customer_name, customer_email, 
@@ -71,13 +70,18 @@ router.post('/', async (req, res) => {
       [reference_number, event_id, customer_name, customer_email, customer_phone, 
        customer_age, quantity, total_amount, 'pending']
     );
-
+    
+    // IMPORTANT: Send response IMMEDIATELY without waiting for email
     res.json({
       order_id: result.rows[0].id,
       reference_number,
       total_amount,
-      cliq_alias: process.env.CLIQ_ALIAS || 'YOUR_CLIQ_ALIAS'
+      cliq_alias: process.env.CLIQ_ALIAS || 'AZADMD'
     });
+    
+    // NOTE: Email sending removed to eliminate latency
+    // Emails will only be sent when admin approves the order
+    
   } catch (error) {
     console.error('Order creation error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -92,42 +96,21 @@ router.post('/:reference/proof', upload.single('payment_proof'), async (req, res
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-
+    
     const orderResult = await pool.query('SELECT id FROM orders WHERE reference_number = $1', [reference]);
+    
     if (orderResult.rows.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
-
+    
     await pool.query(
-      'UPDATE orders SET payment_proof = $1 WHERE reference_number = $2',
-      [`/uploads/${req.file.filename}`, reference]
+      'UPDATE orders SET payment_proof = $1, status = $2 WHERE reference_number = $3',
+      [req.file.filename, 'pending', reference]
     );
-
+    
     res.json({ message: 'Payment proof uploaded successfully' });
   } catch (error) {
     console.error('Upload error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Check order status
-router.get('/:reference', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT o.*, e.title as event_title, e.date, e.time, e.venue
-       FROM orders o
-       JOIN events e ON o.event_id = e.id
-       WHERE o.reference_number = $1`,
-      [req.params.reference]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Order fetch error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
