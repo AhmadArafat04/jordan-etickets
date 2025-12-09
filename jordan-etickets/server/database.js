@@ -15,8 +15,16 @@ const pool = new Pool({
 async function initDatabase() {
   const client = await pool.connect();
   try {
+    // Drop existing tables to recreate with correct schema
     await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
+      DROP TABLE IF EXISTS tickets CASCADE;
+      DROP TABLE IF EXISTS orders CASCADE;
+      DROP TABLE IF EXISTS events CASCADE;
+      DROP TABLE IF EXISTS users CASCADE;
+    `);
+    
+    await client.query(`
+      CREATE TABLE users (
         id SERIAL PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
@@ -25,7 +33,7 @@ async function initDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      CREATE TABLE IF NOT EXISTS events (
+      CREATE TABLE events (
         id SERIAL PRIMARY KEY,
         title TEXT NOT NULL,
         description TEXT,
@@ -40,7 +48,7 @@ async function initDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      CREATE TABLE IF NOT EXISTS orders (
+      CREATE TABLE orders (
         id SERIAL PRIMARY KEY,
         reference_number TEXT UNIQUE NOT NULL,
         event_id INTEGER NOT NULL,
@@ -57,7 +65,7 @@ async function initDatabase() {
         FOREIGN KEY (event_id) REFERENCES events(id)
       );
 
-      CREATE TABLE IF NOT EXISTS tickets (
+      CREATE TABLE tickets (
         id SERIAL PRIMARY KEY,
         order_id INTEGER NOT NULL,
         ticket_number TEXT UNIQUE NOT NULL,
@@ -68,55 +76,15 @@ async function initDatabase() {
       );
     `);
 
-    // Migration: Add missing columns to events table
-    await client.query(`
-      DO $$ 
-      BEGIN
-        -- Add venue column
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name='events' AND column_name='venue'
-        ) THEN
-          ALTER TABLE events ADD COLUMN venue TEXT DEFAULT 'TBD';
-        END IF;
-        
-        -- Add quantity column
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name='events' AND column_name='quantity'
-        ) THEN
-          ALTER TABLE events ADD COLUMN quantity INTEGER DEFAULT 100;
-        END IF;
-        
-        -- Add sold column
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name='events' AND column_name='sold'
-        ) THEN
-          ALTER TABLE events ADD COLUMN sold INTEGER DEFAULT 0;
-        END IF;
-        
-        -- Add status column
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name='events' AND column_name='status'
-        ) THEN
-          ALTER TABLE events ADD COLUMN status TEXT DEFAULT 'active';
-        END IF;
-      END $$;
-    `);
-
-    // Create default admin user if not exists
-    const adminCheck = await client.query('SELECT id FROM users WHERE role = $1', ['admin']);
-    if (adminCheck.rows.length === 0) {
-      const bcrypt = await import('bcryptjs');
-      const hashedPassword = await bcrypt.default.hash('admin123', 10);
-      await client.query(
-        'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4)',
-        ['admin@etickets.jo', hashedPassword, 'Admin', 'admin']
-      );
-      console.log('Default admin created: admin@etickets.jo / admin123');
-    }
+    // Create default admin user
+    const bcrypt = await import('bcryptjs');
+    const hashedPassword = await bcrypt.default.hash('admin123', 10);
+    await client.query(
+      'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4)',
+      ['admin@etickets.jo', hashedPassword, 'Admin', 'admin']
+    );
+    console.log('✅ Default admin created: admin@etickets.jo / admin123');
+    console.log('✅ Database initialized successfully');
   } finally {
     client.release();
   }
