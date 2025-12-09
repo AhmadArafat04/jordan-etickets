@@ -1,5 +1,6 @@
 import express from 'express';
 import db from '../database.js';
+import { sendOrderConfirmationEmail } from '../emailService.js';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -58,11 +59,11 @@ router.post('/', upload.single('paymentProof'), async (req, res) => {
     // Get event details
     const eventResult = await db.query('SELECT * FROM events WHERE id = $1', [eventId]);
     
-    if (eventResult.rows.length === 0) {
+    if (eventResult.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    const event = eventResult.rows[0];
+    const event = eventResult[0];
 
     // Check ticket availability
     if (event.available_tickets < parseInt(numTickets)) {
@@ -102,7 +103,24 @@ router.post('/', upload.single('paymentProof'), async (req, res) => {
       [parseInt(numTickets), eventId]
     );
 
-    res.status(201).json(orderResult.rows[0]);
+    const createdOrder = orderResult[0];
+
+    // Send order confirmation email
+    try {
+      await sendOrderConfirmationEmail({
+        customer_email: customerEmail,
+        customer_name: customerName,
+        event_title: event.title,
+        num_tickets: parseInt(numTickets),
+        total_price: totalPrice
+      });
+      console.log('✅ Order confirmation email sent');
+    } catch (emailError) {
+      console.error('Error sending confirmation email:', emailError);
+      // Don't fail order creation if email fails
+    }
+
+    res.status(201).json(createdOrder);
   } catch (error) {
     console.error('Error creating order:', error);
     res.status(500).json({ error: 'Failed to create order' });
